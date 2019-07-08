@@ -91,7 +91,7 @@ __global__ void nanoBraggSpotsInitCUDAKernel(int spixels, int fpixesl, float * f
 		float * max_I_y_reduction, bool * rangemap);
 
 __global__ void nanoBraggSpotsCUDAKernel(int spixels, int fpixels, int roi_xmin, int roi_xmax, int roi_ymin, int roi_ymax, int oversample, int point_pixel,
-CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thickstep, int detector_thicksteps, CUDAREAL detector_thick, CUDAREAL detector_mu,
+        CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thickstep, int detector_thicksteps, CUDAREAL detector_thick, CUDAREAL detector_mu,
 		const CUDAREAL * __restrict__ sdet_vector, const CUDAREAL * __restrict__ fdet_vector, const CUDAREAL * __restrict__ odet_vector,
 		const CUDAREAL * __restrict__ pix0_vector, int curved_detector, CUDAREAL distance, CUDAREAL close_distance, const CUDAREAL * __restrict__ beam_vector,
 		CUDAREAL Xbeam, CUDAREAL Ybeam, CUDAREAL dmin, CUDAREAL phi0, CUDAREAL phistep, int phisteps, const CUDAREAL * __restrict__ spindle_vector, int sources,
@@ -105,6 +105,44 @@ CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thicks
 		const int unsigned short * __restrict__ maskimage, float * floatimage /*out*/, float * omega_reduction/*out*/, float * max_I_x_reduction/*out*/,
 		float * max_I_y_reduction /*out*/, bool * rangemap);
 
+class GpuTimer
+{
+    private:
+    cudaEvent_t start;
+    cudaEvent_t stop;
+
+    public:
+    GpuTimer()
+    {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+    }
+
+    ~GpuTimer()
+    {
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+
+    void _start()
+    {
+        cudaEventRecord(start, 0);
+    }
+
+    void _stop()
+    {
+        cudaEventRecord(stop, 0);
+    }
+
+    float _elapsed()
+    {
+        float elapsed;
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&elapsed, start, stop);
+        return elapsed;
+    }
+};
+
 
 extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int roi_xmax, int roi_ymin, int roi_ymax, int oversample, int point_pixel,
 		double pixel_size, double subpixel_size, int steps, double detector_thickstep, int detector_thicksteps, double detector_thick, double detector_mu,
@@ -116,7 +154,7 @@ extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int r
 		int interpolate, double *** Fhkl, int h_min, int h_max, int h_range, int k_min, int k_max, int k_range, int l_min, int l_max, int l_range, int hkls,
 		int nopolar, double polar_vector[4], double polarization, double fudge, int unsigned short * maskimage, float * floatimage /*out*/,
 		double * omega_sum/*out*/, int * sumn /*out*/, double * sum /*out*/, double * sumsqr /*out*/, double * max_I/*out*/, double * max_I_x/*out*/,
-		double * max_I_y /*out*/) {
+		double * max_I_y /*out*/){
 
 	int total_pixels = spixels * fpixels;
 
@@ -302,6 +340,9 @@ extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int r
 	//  CUDA_CHECK_RETURN(cudaPeekAtLastError());
 	//  CUDA_CHECK_RETURN(cudaDeviceSynchronize());
 
+    GpuTimer gpu_timer;
+	CUDA_CHECK_RETURN(cudaDeviceSynchronize());
+    gpu_timer._start();
 	nanoBraggSpotsCUDAKernel<<<numBlocks, threadsPerBlock>>>(cu_spixels, cu_fpixels, cu_roi_xmin, cu_roi_xmax, cu_roi_ymin, cu_roi_ymax, cu_oversample,
 			cu_point_pixel, cu_pixel_size, cu_subpixel_size, cu_steps, cu_detector_thickstep, cu_detector_thicksteps, cu_detector_thick, cu_detector_mu,
 			cu_sdet_vector, cu_fdet_vector, cu_odet_vector, cu_pix0_vector, cu_curved_detector, cu_distance, cu_close_distance, cu_beam_vector,
@@ -313,6 +354,9 @@ extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int r
 			cu_floatimage /*out*/, cu_omega_reduction/*out*/, cu_max_I_x_reduction/*out*/, cu_max_I_y_reduction /*out*/, cu_rangemap /*out*/);
 
 	CUDA_CHECK_RETURN(cudaPeekAtLastError());
+	CUDA_CHECK_RETURN(cudaDeviceSynchronize());
+    gpu_timer._stop();
+    fprintf(stderr, "GPU TIME %f\n",gpu_timer._elapsed());
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize());
 
 	CUDA_CHECK_RETURN(cudaMemcpy(floatimage, cu_floatimage, sizeof(*cu_floatimage) * total_pixels, cudaMemcpyDeviceToHost));
@@ -445,8 +489,7 @@ CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thicks
         int nopolar, const CUDAREAL * __restrict__ polar_vector,
 		CUDAREAL polarization, CUDAREAL fudge, const int unsigned short * __restrict__ maskimage,
         float * floatimage /*out*/, float * omega_reduction/*out*/,
-		float * max_I_x_reduction/*out*/, float * max_I_y_reduction /*out*/, bool * rangemap){
-
+        float * max_I_x_reduction/*out*/, float * max_I_y_reduction /*out*/, bool * rangemap){
 	__shared__ CUDAREAL s_dmin;
 
 	__shared__ bool s_nopolar;
@@ -759,7 +802,7 @@ CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thicks
 								}
 								if (s_xtal_shape == GAUSS) {
 									/* fudge the radius so that volume and FWHM are similar to square_xtal spots */
-									F_latt = Na * Nb * Nc * exp(-(hrad_sqr / 0.63 * fudge));
+                                    F_latt = Na * Nb * Nc * exp(-(hrad_sqr / 0.63 * fudge)); // ORIGINAL
 								}
 								if (s_xtal_shape == TOPHAT) {
 									/* make a flat-top spot of same height and volume as square_xtal spots */
