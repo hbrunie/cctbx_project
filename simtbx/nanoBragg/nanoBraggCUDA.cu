@@ -10,6 +10,8 @@
 
 #include <iostream>
 #include <numeric>
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include "nanotypes.h"
@@ -103,7 +105,7 @@ __global__ void nanoBraggSpotsCUDAKernel(int spixels, int fpixels, int roi_xmin,
 		CUDAREAL water_size, CUDAREAL water_F, CUDAREAL water_MW, CUDAREAL r_e_sqr, CUDAREAL fluence, CUDAREAL Avogadro, int integral_form, CUDAREAL default_F,
 		int interpolate, const CUDAREAL * __restrict__ Fhkl, const hklParams * __restrict__ Fhklparams, int nopolar, const CUDAREAL * __restrict__ polar_vector, CUDAREAL polarization, CUDAREAL fudge,
 		const int unsigned short * __restrict__ maskimage, float * floatimage /*out*/, float * omega_reduction/*out*/, float * max_I_x_reduction/*out*/,
-		float * max_I_y_reduction /*out*/, bool * rangemap);
+		float * max_I_y_reduction /*out*/, bool * rangemap, thrust::device_vector<double> device_hrad);
 
 class GpuTimer
 {
@@ -154,7 +156,7 @@ extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int r
 		int interpolate, double *** Fhkl, int h_min, int h_max, int h_range, int k_min, int k_max, int k_range, int l_min, int l_max, int l_range, int hkls,
 		int nopolar, double polar_vector[4], double polarization, double fudge, int unsigned short * maskimage, float * floatimage /*out*/,
 		double * omega_sum/*out*/, int * sumn /*out*/, double * sum /*out*/, double * sumsqr /*out*/, double * max_I/*out*/, double * max_I_x/*out*/,
-		double * max_I_y /*out*/){
+		double * max_I_y /*out*/, thrust::host_vector<double> host_hrad) {
 
 	int total_pixels = spixels * fpixels;
 
@@ -342,6 +344,7 @@ extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int r
 
     GpuTimer gpu_timer;
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize());
+    thrust::device_vector<double>  device_hrad = host_hrad;
     gpu_timer._start();
 	nanoBraggSpotsCUDAKernel<<<numBlocks, threadsPerBlock>>>(cu_spixels, cu_fpixels, cu_roi_xmin, cu_roi_xmax, cu_roi_ymin, cu_roi_ymax, cu_oversample,
 			cu_point_pixel, cu_pixel_size, cu_subpixel_size, cu_steps, cu_detector_thickstep, cu_detector_thicksteps, cu_detector_thick, cu_detector_mu,
@@ -351,12 +354,14 @@ extern "C" void nanoBraggSpotsCUDA(int spixels, int fpixels, int roi_xmin, int r
 			cu_mosaic_spread, cu_mosaic_domains, cu_mosaic_umats, cu_Na, cu_Nb, cu_Nc, cu_V_cell, cu_water_size, cu_water_F, cu_water_MW, cu_r_e_sqr, cu_fluence,
 			cu_Avogadro, cu_integral_form, cu_default_F, cu_interpolate, cu_Fhkl, cu_FhklParams,
 			cu_nopolar, cu_polar_vector, cu_polarization, cu_fudge, cu_maskimage,
-			cu_floatimage /*out*/, cu_omega_reduction/*out*/, cu_max_I_x_reduction/*out*/, cu_max_I_y_reduction /*out*/, cu_rangemap /*out*/);
+			cu_floatimage /*out*/, cu_omega_reduction/*out*/, cu_max_I_x_reduction/*out*/, cu_max_I_y_reduction /*out*/, cu_rangemap /*out*/,
+            device_hrad);
 
 	CUDA_CHECK_RETURN(cudaPeekAtLastError());
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize());
     gpu_timer._stop();
     fprintf(stderr, "GPU TIME %f\n",gpu_timer._elapsed());
+    host_hrad = device_hrad;
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize());
 
 	CUDA_CHECK_RETURN(cudaMemcpy(floatimage, cu_floatimage, sizeof(*cu_floatimage) * total_pixels, cudaMemcpyDeviceToHost));
@@ -489,7 +494,7 @@ CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thicks
         int nopolar, const CUDAREAL * __restrict__ polar_vector,
 		CUDAREAL polarization, CUDAREAL fudge, const int unsigned short * __restrict__ maskimage,
         float * floatimage /*out*/, float * omega_reduction/*out*/,
-        float * max_I_x_reduction/*out*/, float * max_I_y_reduction /*out*/, bool * rangemap){
+        float * max_I_x_reduction/*out*/, float * max_I_y_reduction /*out*/, bool * rangemap,thrust::device_vector<double> device_hrad){
 	__shared__ CUDAREAL s_dmin;
 
 	__shared__ bool s_nopolar;
@@ -550,6 +555,7 @@ CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thicks
 //	CUDAREAL * tmpVector2 = sharedVectors[tidx][1];
 
 	/* add background from something amorphous */
+    //double local_hrad_sqr_vector[s_mosaic_domains*s_phisteps];
 	CUDAREAL F_bg = water_F;
 	CUDAREAL I_bg = F_bg * F_bg * r_e_sqr * fluence * water_size * water_size * water_size * 1e6 * Avogadro / water_MW;
 
@@ -794,6 +800,16 @@ CUDAREAL pixel_size, CUDAREAL subpixel_size, int steps, CUDAREAL detector_thicks
 								} else {
 									/* handy radius in reciprocal space, squared */
 									hrad_sqr = (h - h0) * (h - h0) * Na * Na + (k - k0) * (k - k0) * Nb * Nb + (l - l0) * (l - l0) * Nc * Nc;
+                                    int s2 = oversample*oversample*detector_thicksteps*
+                                                sources*phisteps*mosaic_domains;
+                                    int s3 = oversample*detector_thicksteps*
+                                                sources*phisteps*mosaic_domains;
+                                    int s4 = detector_thicksteps*
+                                                sources*phisteps*mosaic_domains;
+                                    int s5 = sources*phisteps*mosaic_domains;
+                                    int s6 = phisteps*mosaic_domains;
+                                    int s7 = mosaic_domains;
+                                    device_hrad[pixIdx + subS*s2 + subF*s3 + thick_tic*s4 + source *s5 + phi_tic*s6 + mos_tic*s7] = hrad_sqr;
 								}
 								if (s_xtal_shape == ROUND) {
 									/* use sinc3 for elliptical xtal shape,
