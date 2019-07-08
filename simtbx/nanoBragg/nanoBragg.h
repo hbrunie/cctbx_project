@@ -22,6 +22,10 @@
 #include <boost_adaptbx/python_streambuf.h>
 #include <omptbx/omp_or_stubs.h>
 
+#ifdef NANOBRAGG_HAVE_CUDA
+#include <simtbx/nanoBragg/cuda_struct.h>
+#endif
+
 using boost::math::erf;
 using boost::math::isnan;
 #define isnan(X) boost::math::isnan(X)
@@ -447,6 +451,12 @@ class nanoBragg {
     /* misseting angles, applied after any provided A and U matrices */
     double misset[4];
 
+    /* struct for CUDA pointers */
+#ifdef NANOBRAGG_HAVE_CUDA
+    bool timelog;
+    int device_Id;
+    cudaPointers cpo;
+#endif
     /* special options */
 //    bool calculate_noise; // = 1;
 //    bool write_pgm; // = 1;
@@ -484,8 +494,8 @@ class nanoBragg {
          with class variables that manage memory and lifetime.  These will include std::string,
          std::map, std::vector, std::shared_ptr, and flex arrays.
        */
-
-      printf("free all memory within nanoBragg\n");
+      if (verbose)
+        printf("free all memory within nanoBragg\n");
       if(verbose>9)printf("pixels_in %p\n",pixels_in);
       free(pixels_in);
       if(verbose>9)printf("bin_start %p\n",bin_start);
@@ -534,8 +544,8 @@ class nanoBragg {
         free(Fhkl);
       }
       hkls = 0;
-
-      printf("finished freeing memory\n");
+      if (verbose)
+        printf("finished freeing memory\n");
     }
 
     /* member functions to run once (might allocate memory) */
@@ -572,6 +582,12 @@ class nanoBragg {
     void add_nanoBragg_spots();
     void add_nanoBragg_spots_nks(boost_adaptbx::python::streambuf &);
 #ifdef NANOBRAGG_HAVE_CUDA
+    void allocate_cuda();
+    void add_energy_channel_cuda();
+    void add_nanoBragg_spots_cuda_update();
+    int get_num_devices();
+    void get_raw_pixels_cuda();
+    void deallocate_cuda();
     void add_nanoBragg_spots_cuda();
 #endif
 

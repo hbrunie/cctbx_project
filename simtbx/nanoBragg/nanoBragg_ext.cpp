@@ -1858,9 +1858,31 @@ printf("DEBUG: pythony_stolFbg[1]=(%g,%g)\n",nanoBragg.pythony_stolFbg[1][0],nan
        "actually run the spot simulation, going pixel-by-pixel over the region-of-interest, restricted options, plus OpenMP")
 
 #ifdef NANOBRAGG_HAVE_CUDA
+      .add_property("timelog",
+                     make_getter(&nanoBragg::timelog,rbv()),
+                     make_setter(&nanoBragg::timelog,dcp()),
+                     "whether to log the timing.")
+      .add_property("device_Id",
+                     make_getter(&nanoBragg::device_Id,rbv()),
+                     make_setter(&nanoBragg::device_Id,dcp()),
+                     "Which device to simulate on. ")
+      
       /* actual run of the spot simulation, CUDA version */
       .def("add_nanoBragg_spots_cuda",&nanoBragg::add_nanoBragg_spots_cuda,
        "actually run the spot simulation, going pixel-by-pixel over the region-of-interest, CUDA version")
+
+      /* new CUDA path */
+      .def("det_num_devices", &nanoBragg::get_num_devices, "get the number of GPU devices")
+      .def("allocate_cuda", &nanoBragg::allocate_cuda,
+       "Allocate and transfer input data on the GPU")
+      .def("add_energy_channel_cuda", &nanoBragg::add_energy_channel_cuda,
+       "Accumulate Fhkl contributions on the GPU")
+      .def("get_raw_pixels_cuda", &nanoBragg::get_raw_pixels_cuda,
+       "Update raw_pixels on host with array from GPU")
+      .def("deallocate_cuda", &nanoBragg::deallocate_cuda,
+       "Deallocate arrays on the GPU")
+      .def("add_nanoBragg_spots_cuda_update", &nanoBragg::add_nanoBragg_spots_cuda_update,
+       "copy over all the small stuff, 0-out the image, and run the kernel")
 #endif
 
       /* actual run of the background simulation */
