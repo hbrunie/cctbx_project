@@ -51,12 +51,13 @@ def main(shape=shapetype.Tophat, cuda=False, seed=None):
     if cuda:
         # NOTE: uncomment the following 4 lines and comment the add_nanoBragg_spots_cuda() call
         # in order to use current dev-mode code!
-        #SIM.allocate_cuda()
-        #SIM.add_nanoBragg_spots_cuda_update()
-        #SIM.get_raw_pixels_cuda()
-        #SIM.deallocate_cuda()
+        print("test dev MODE *****")
+        SIM.allocate_cuda()
+        SIM.add_nanoBragg_spots_cuda_update()
+        SIM.get_raw_pixels_cuda()
+        SIM.deallocate_cuda()
         
-        SIM.add_nanoBragg_spots_cuda()
+        #SIM.add_nanoBragg_spots_cuda()
     else:
         SIM.add_nanoBragg_spots()
     img = SIM.raw_pixels.as_numpy_array()
