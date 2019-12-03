@@ -13,8 +13,8 @@ class crystal_model(worker):
   def __repr__(self):
     return 'Build crystal model'
 
-  def __init__(self, params, purpose):
-    super(crystal_model, self).__init__(params=params)
+  def __init__(self, params, purpose, mpi_helper=None, mpi_logger=None):
+    super(crystal_model, self).__init__(params=params, mpi_helper=mpi_helper, mpi_logger=mpi_logger)
     self.purpose = purpose
 
   def run(self, experiments, reflections):
@@ -72,26 +72,35 @@ class crystal_model(worker):
 
     self.logger.log_step_time("CREATE_CRYSTAL_MODEL", True)
 
+    # Add asymmetric unit indexes to the reflection table
+    if self.purpose == "scaling":
+      self.logger.log_step_time("ADD_ASU_HKL_COLUMN")
+      self.add_asu_miller_indices_column(reflections)
+      self.logger.log_step_time("ADD_ASU_HKL_COLUMN", True)
+
     return experiments, reflections
 
   def create_model_from_pdb(self, model_file_path):
-    from iotbx import file_reader
 
-    pdb_in = file_reader.any_file(model_file_path, force_type="pdb")
-    pdb_in.assert_file_type("pdb")
+    if self.mpi_helper.rank == 0:
+      from iotbx import file_reader
+      pdb_in = file_reader.any_file(model_file_path, force_type="pdb")
+      pdb_in.assert_file_type("pdb")
+      xray_structure = pdb_in.file_object.xray_structure_simple()
+      out = StringIO()
+      xray_structure.show_summary(f=out)
+      self.logger.main_log(out.getvalue())
+      space_group = xray_structure.crystal_symmetry().space_group().info()
+      unit_cell = xray_structure.crystal_symmetry().unit_cell()
+    else:
+      xray_structure = space_group = unit_cell = None
 
-    xray_structure = pdb_in.file_object.xray_structure_simple()
+    xray_structure, space_group, unit_cell = self.mpi_helper.comm.bcast((xray_structure, space_group, unit_cell), root=0)
 
     if self.purpose == "scaling":
       # save space group and unit cell as scaling targets
-      self.params.scaling.space_group = xray_structure.crystal_symmetry().space_group().info()
-      self.params.scaling.unit_cell = xray_structure.crystal_symmetry().unit_cell()
-
-    out = StringIO()
-    xray_structure.show_summary(f=out)
-    self.logger.log(out.getvalue())
-    if self.mpi_helper.rank == 0:
-      self.logger.main_log(out.getvalue())
+      self.params.scaling.space_group = space_group
+      self.params.scaling.unit_cell = unit_cell
 
     # prepare phil parameters to generate model intensities
     phil2 = mmtbx.command_line.fmodel.fmodel_from_xray_structure_master_params
@@ -149,20 +158,28 @@ class crystal_model(worker):
 
   def create_model_from_mtz(self, model_file_path):
 
+    if self.mpi_helper.rank == 0:
+      from iotbx import mtz
+      data_SR = mtz.object(model_file_path)
+      arrays = data_SR.as_miller_arrays()
+      space_group = data_SR.space_group().info()
+      unit_cell   = data_SR.crystals()[0].unit_cell()
+    else:
+      arrays = space_group = unit_cell = None
+
+    arrays, space_group, unit_cell = self.mpi_helper.comm.bcast((arrays, space_group, unit_cell), root=0)
+
+    # save space group and unit cell as scaling targets
+    if self.purpose == "scaling":
+      self.params.scaling.space_group = space_group
+      self.params.scaling.unit_cell   = unit_cell
+
     if self.purpose == "scaling":
       mtz_column_F = str(self.params.scaling.mtz.mtz_column_F)
     elif self.purpose == "statistics":
       mtz_column_F = str(self.params.statistics.cciso.mtz_column_F)
 
-    from iotbx import mtz
-    data_SR = mtz.object(model_file_path)
-
-    if self.purpose == "scaling":
-      # save space group and unit cell as scaling targets
-      self.params.scaling.space_group = data_SR.space_group().info()
-      self.params.scaling.unit_cell   = data_SR.crystals()[0].unit_cell()
-
-    for array in data_SR.as_miller_arrays():
+    for array in arrays:
       this_label = array.info().label_string().lower()
       if True not in [this_label.find(tag)>=0 for tag in ["iobs","imean", mtz_column_F]]:
         continue
@@ -172,19 +189,26 @@ class crystal_model(worker):
     raise Exception("mtz did not contain expected label Iobs or Imean")
 
   def consistent_set_and_model(self, i_model=None):
+    assert self.params.scaling.space_group, "Space group must be specified in the input parameters or a reference file must be present"
     # which unit cell are we using?
     if self.purpose == "scaling":
+      assert self.params.scaling.unit_cell is not None, "Unit cell must be specified in the input parameters or a reference file must be present"
       unit_cell = self.params.scaling.unit_cell
       self.logger.log("Using target unit cell: " + str(unit_cell))
       if self.mpi_helper.rank == 0:
         self.logger.main_log("Using target unit cell: " + str(unit_cell))
     elif self.purpose == "statistics":
       if self.params.merging.set_average_unit_cell:
-        unit_cell = self.params.statistics.__phil_get__('average_unit_cell')
-        self.logger.log("Using average unit cell: " + str(unit_cell))
+        assert self.params.statistics.average_unit_cell is not None, "Average unit cell hasn't been calculated"
+        unit_cell = self.params.statistics.average_unit_cell
+        unit_cell_formatted = "(%.6f, %.6f, %.6f, %.3f, %.3f, %.3f)"\
+                          %(unit_cell.parameters()[0], unit_cell.parameters()[1], unit_cell.parameters()[2], \
+                            unit_cell.parameters()[3], unit_cell.parameters()[4], unit_cell.parameters()[5])
+        self.logger.log("Using average unit cell: " + unit_cell_formatted)
         if self.mpi_helper.rank == 0:
-          self.logger.main_log("Using average unit cell: " + str(unit_cell))
+          self.logger.main_log("Using average unit cell: " + unit_cell_formatted)
       else:
+        assert self.params.scaling.unit_cell is not None, "Unit cell must be specified in the input parameters or a reference file must be present"
         unit_cell = self.params.scaling.unit_cell
         self.logger.log("Using target unit cell: " + str(unit_cell))
         if self.mpi_helper.rank == 0:
@@ -221,18 +245,43 @@ class crystal_model(worker):
       # N(i_model) >= N(miller_set) since it fills non-matches with invalid structure factors
       # However, if N(i_model) > N(miller_set), it's because this run of cxi.merge requested
       # a smaller resolution range.  Must prune off the reference model.
+
+      #RB 10/07/2019 The old cxi.merge comment regarding N(i_model) vs. N(miller_set) - see above - refers to pdb references only.
+      #Now applying the same approach to all cases when the reference is mtz.
+
       if self.purpose == "scaling":
-        if i_model.indices().size() > miller_set.indices().size():
+        is_mtz = str(self.params.scaling.model).endswith(".mtz")
+        if i_model.indices().size() > miller_set.indices().size() or is_mtz:
           matches = miller.match_indices(i_model.indices(), miller_set.indices())
           pairs = matches.pairs()
           i_model = i_model.select(pairs.column(0))
-
         matches = miller.match_indices(i_model.indices(), miller_set.indices())
-        #assert not matches.have_singles()
+        if is_mtz:
+          assert matches.pairs().size() >= self.params.scaling.mtz.minimum_common_hkls, "Number of common HKLs between mtz reference and data (%d) is less than required (%d)."\
+                 %(matches.pairs().size(), self.params.scaling.mtz.minimum_common_hkls)
         miller_set = miller_set.select(matches.permutation())
 
     return miller_set, i_model
 
+  def add_asu_miller_indices_column(self, reflections):
+    '''Add a "symmetry-reduced hkl" column to the reflection table'''
+    if reflections.size() == 0:
+      return
+
+    import copy
+
+    # Build target symmetry. The exact experiment unit cell values don't matter for converting HKLs to asu HKLs.
+    target_unit_cell = self.params.scaling.unit_cell
+    target_space_group_info = self.params.scaling.space_group
+    target_symmetry = symmetry(unit_cell=target_unit_cell, space_group_info=target_space_group_info)
+    target_space_group = target_symmetry.space_group()
+
+    # generate and add an asu hkl column
+    if 'miller_index_asymmetric' not in reflections:
+      reflections['miller_index_asymmetric'] = copy.deepcopy(reflections['miller_index'])
+      miller.map_to_asu(target_space_group.type(),
+                        not self.params.merging.merge_anomalous,
+                        reflections['miller_index_asymmetric'])
   '''
   def get_min_max_experiment_unit_cell_volume(self, experiments):
 

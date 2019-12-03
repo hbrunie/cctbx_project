@@ -67,9 +67,6 @@ cc_one_half_method = *half_dataset sigma_tau
 class StatisticsError(RuntimeError):
   '''Custom error class, so that these errors can be caught and dealt with appropriately.'''
 
-class StatisticsErrorNoReflectionsInRange(StatisticsError):
-  '''Attempted to calculate statistics for an empty resolution range.'''
-
 class model_based_arrays(object):
   """
   Container for observed and calculated intensities, along with the selections
@@ -242,8 +239,8 @@ class merging_stats(object):
         d_min=self.d_min).resolution_filter(d_min=self.d_min, d_max=self.d_max)
     n_expected = len(complete_set.indices())
     if (n_expected == 0):
-      raise StatisticsErrorNoReflectionsInRange(
-          ("No reflections within specified resolution range (%g - %g)") % (self.d_max, self.d_min))
+      raise StatisticsError(
+          "No reflections within specified resolution range (%g - %g)" % (self.d_max, self.d_min))
     self.completeness = min(self.n_uniq / n_expected, 1.)
     self.anom_completeness = None
     # TODO also calculate when anomalous=False, since it is customary to
@@ -488,7 +485,8 @@ class dataset_statistics(object):
     self.crystal_symmetry = crystal_symmetry
     i_obs = i_obs.customized_copy(
       crystal_symmetry=crystal_symmetry).set_info(info)
-    if (assert_is_not_unique_set_under_symmetry and i_obs.is_unique_set_under_symmetry()):
+    if (assert_is_not_unique_set_under_symmetry and
+        i_obs.as_anomalous_array().is_unique_set_under_symmetry()):
       raise Sorry(("The data in %s are already merged.  Only unmerged (but "+
         "scaled) data may be used in this program.")%
         i_obs.info().label_string())
@@ -922,13 +920,15 @@ class dataset_statistics(object):
     print("for refinement.", file=out)
 
 def select_data(file_name, data_labels, log=None,
-    assume_shelx_observation_type_is=None, allow_amplitudes=None):
+    assume_shelx_observation_type_is=None, allow_amplitudes=None, anomalous=None):
   if (log is None) : log = null_out()
   from iotbx import reflection_file_reader
   hkl_in = reflection_file_reader.any_reflection_file(file_name)
   print("Format:", hkl_in.file_type(), file=log)
   miller_arrays = hkl_in.as_miller_arrays(merge_equivalents=False,
-    assume_shelx_observation_type_is=assume_shelx_observation_type_is)
+    assume_shelx_observation_type_is=assume_shelx_observation_type_is,
+    anomalous=anomalous,
+  )
   if ((hkl_in.file_type() == "shelx_hklf") and (not "=" in file_name)
        and assume_shelx_observation_type_is is None):
     print("WARNING: SHELX file is assumed to contain intensities", file=log)

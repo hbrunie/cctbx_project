@@ -80,7 +80,7 @@ class RunBlockButton(GradButton):
     db = block.app
     self.rnum = block.rungroup_id
     self.first_run, self.last_run = block.get_first_and_last_runs()
-    self.use_ids = db.params.facility.name != 'lcls'
+    self.use_ids = db.params.facility.name not in ['lcls']
 
     GradButton.__init__(self, parent=parent, label='',
                         size=size)
@@ -102,6 +102,23 @@ class RunBlockButton(GradButton):
 
     self.block_label = '[{}] runs {}{}'.format(self.rnum, first, last)
     self.SetLabel(self.block_label)
+    self.Refresh()
+
+class TaskButton(GradButton):
+  def __init__(self, parent, task, size=wx.DefaultSize):
+    self.task = task
+    self.db = task.app
+
+    GradButton.__init__(self, parent=parent, label='',
+                        size=size)
+    self.update_label()
+
+  def update_label(self):
+    if self.task.trial is None:
+      self.task_label = '[{}] {}'.format(self.task.task_id, self.task.type)
+    else:
+      self.task_label = '[{}] {} trial {}'.format(self.task.task_id, self.task.type, self.task.trial.trial)
+    self.SetLabel(self.task_label)
     self.Refresh()
 
 class TagButton(GradButton):
@@ -635,14 +652,27 @@ class RunBlock(CtrlBase):
 
     self.sizer = wx.FlexGridSizer(1, 2, 0, 5)
     self.new_runblock = RunBlockButton(self, size=(200, 30), block=block)
-    # self.del_runblock = wx.BitmapButton(self,
-    #                     bitmap=wx.Bitmap('{}/16x16/delete.png'.format(icons)))
 
     self.sizer.Add(self.new_runblock)
-    # self.sizer.Add(self.del_runblock)
 
     self.SetSizer(self.sizer)
 
+class TaskCtrl(CtrlBase):
+  def __init__(self, parent, task,
+               label_style='normal',
+               content_style='normal'):
+
+    self.task = task
+
+    CtrlBase.__init__(self, parent=parent, label_style=label_style,
+                      content_style=content_style)
+
+    self.sizer = wx.FlexGridSizer(1, 2, 0, 5)
+    self.new_task = TaskButton(self, size=(250, 30), task=task)
+
+    self.sizer.Add(self.new_task)
+
+    self.SetSizer(self.sizer)
 
 class PHILBox(CtrlBase):
   def __init__(self, parent,

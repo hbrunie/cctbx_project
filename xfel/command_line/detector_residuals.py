@@ -18,6 +18,7 @@
 from __future__ import absolute_import, division, print_function
 from six.moves import range
 from dials.array_family import flex
+from dials.util import show_mail_on_error
 from scitbx.matrix import col
 from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
@@ -36,7 +37,7 @@ between observed and predicted reflections
 
 Example:
 
-  dev.cctbx.xfel.detector_residuals experiment.json reflections.pickle
+  dev.cctbx.xfel.detector_residuals experiment.expt reflections.refl
 '''
 
 # Create the phil parameters
@@ -794,6 +795,8 @@ class ResidualsPlotter(object):
         reflections['xyzcal.mm'] = reflections['xyzcal.mm.%s'%dest]
         reflections['xyzcal.px'] = reflections['xyzcal.px.%s'%dest]
 
+    if 'xyzobs.mm.value' not in reflections:
+      reflections.centroid_px_to_mm(experiments)
     reflections['difference_vector_norms'] = (reflections['xyzcal.mm']-reflections['xyzobs.mm.value']).norms()
 
     n = len(reflections)
@@ -1364,9 +1367,6 @@ class ResidualsPlotter(object):
       plt.show()
 
 if __name__ == '__main__':
-  from dials.util import halraiser
-  try:
+  with show_mail_on_error():
     script = Script()
     script.run()
-  except Exception as e:
-    halraiser(e)

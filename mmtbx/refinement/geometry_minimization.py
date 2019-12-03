@@ -51,17 +51,20 @@ def add_rotamer_restraints(
       restraints_manager,
       selection,
       sigma,
-      mode,
+      mode=None,
       accept_allowed=True,
       mon_lib_srv=None,
       rotamer_manager=None):
-  pdb_hierarchy_for_proxies = mmtbx.utils.switch_rotamers(
-    pdb_hierarchy  = pdb_hierarchy,#.deep_copy(),
-    mode           = mode,
-    accept_allowed = accept_allowed,
-    selection      = selection,
-    mon_lib_srv    = mon_lib_srv,
-    rotamer_manager= rotamer_manager)
+  if(mode is not None):
+    pdb_hierarchy_for_proxies = mmtbx.utils.switch_rotamers(
+      pdb_hierarchy  = pdb_hierarchy.deep_copy(),
+      mode           = mode,
+      accept_allowed = accept_allowed,
+      selection      = selection,
+      mon_lib_srv    = mon_lib_srv,
+      rotamer_manager= rotamer_manager)
+  else:
+    pdb_hierarchy_for_proxies = pdb_hierarchy.deep_copy()
   restraints_manager.geometry.add_chi_torsion_restraints_in_place(
     pdb_hierarchy   = pdb_hierarchy_for_proxies,
     sites_cart      = pdb_hierarchy_for_proxies.atoms().extract_xyz(),
@@ -151,7 +154,7 @@ class run2(object):
         geometry_restraints_flags.nonbonded = bool(i_macro_cycle % 2)
       self.update_cdl_restraints(macro_cycle=i_macro_cycle)
       if(fix_rotamer_outliers):
-        self.pdb_hierarchy, self.restraints_manager = add_rotamer_restraints(
+        junk, self.restraints_manager = add_rotamer_restraints(
           pdb_hierarchy      = self.pdb_hierarchy,
           restraints_manager = self.restraints_manager,
           selection          = selection,

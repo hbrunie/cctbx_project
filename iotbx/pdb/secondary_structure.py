@@ -405,6 +405,8 @@ class structure_base(object):
   @staticmethod
   def filter_helix_records(lines):
     result = []
+    if lines is None:
+      return result
     for line in lines:
       if line.startswith("HELIX"):
         result.append(line)
@@ -416,6 +418,8 @@ class structure_base(object):
     returns [[lines with equal sheetID], ... ,[lines with equal sheetID]]
     """
     result = []
+    if lines is None:
+      return result
     current_sh_lines = []
     current_sh_id = ""
     for line in lines:
@@ -608,6 +612,24 @@ class annotation(structure_base):
         and struct_sheet_order_loop is not None
         and struct_sheet_range_loop is not None
         and struct_sheet_hbond_loop is not None):
+      # Check that keys are unique
+      error_msg_list = []
+      dups_sheet = struct_sheet_loop.check_key_is_unique(key_list=["_struct_sheet.id"])
+      dups_order = struct_sheet_order_loop.check_key_is_unique(key_list=["_struct_sheet_order.sheet_id",
+          "_struct_sheet_order.range_id_1", "_struct_sheet_order.range_id_2"])
+      dups_range = struct_sheet_range_loop.check_key_is_unique(key_list=["_struct_sheet_range.sheet_id",
+            "_struct_sheet_range.id"])
+      dups_hbond = struct_sheet_hbond_loop.check_key_is_unique(key_list=["_pdbx_struct_sheet_hbond.sheet_id",
+          "_pdbx_struct_sheet_hbond.range_id_1", "_pdbx_struct_sheet_hbond.range_id_2"])
+      for e_str, dups in [("Duplication in _struct_sheet.id: %s", dups_sheet),
+          ("Duplication in _struct_sheet_order: %s %s %s", dups_order),
+          ("Duplication in _struct_sheet_range: %s %s", dups_range),
+          ("Duplication in _pdbx_struct_sheet_hbond: %s %s %s", dups_hbond)]:
+        for dup in dups:
+          error_msg_list.append(e_str % dup)
+      if len(error_msg_list) > 0:
+        msg = "Error in sheet definitions:\n  " + "\n  ".join(error_msg_list)
+        raise Sorry(msg)
       for sheet_row in struct_sheet_loop.iterrows():
         sheet_id = sheet_row['_struct_sheet.id']
         # we will count number_of_strands in from_cif_rows
@@ -713,20 +735,21 @@ class annotation(structure_base):
         del self.sheets[i]
     return annotation(helices=deleted_helices, sheets=deleted_sheets)
 
-  def remove_short_annotations(self):
+  def remove_short_annotations(self,
+      helix_min_len=5, sheet_min_len=3, keep_one_stranded_sheets=False):
     # returns nothing
     # Remove short annotations
     h_indeces_to_delete = []
     for i, h in enumerate(self.helices):
-      if h.length < 5:
+      if h.length < helix_min_len:
         h_indeces_to_delete.append(i)
     if len(h_indeces_to_delete) > 0:
       for i in reversed(h_indeces_to_delete):
         del self.helices[i]
     sh_indeces_to_delete = []
     for i, sh in enumerate(self.sheets):
-      sh.remove_short_strands()
-      if sh.n_strands < 2:
+      sh.remove_short_strands(size=sheet_min_len)
+      if sh.n_strands < 2 and not keep_one_stranded_sheets:
         sh_indeces_to_delete.append(i)
     if len(sh_indeces_to_delete) > 0:
       for i in reversed(sh_indeces_to_delete):
@@ -1162,6 +1185,18 @@ class annotation(structure_base):
     return selections
 
   def overall_selection(self,add_segid=None,trim_ends_by=None):
+    result = ""
+    result = self.overall_helices_selection(add_segid=add_segid,trim_ends_by=trim_ends_by)
+    s_s = self.overall_sheets_selection(add_segid=add_segid,trim_ends_by=trim_ends_by)
+    if len(s_s) > 0 and len(result) > 0:
+      result += " or %s" % s_s
+      return result
+    if len(result) == 0:
+      return s_s
+    else:
+      return result
+
+  def overall_helices_selection(self, add_segid=None,trim_ends_by=None):
     selections = []
     for helix in self.helices:
       try :
@@ -1169,13 +1204,18 @@ class annotation(structure_base):
          trim_ends_by=trim_ends_by))
       except RuntimeError as e :
         pass
+    return "(" + ") or (".join(selections) + ")" if len(selections) > 0 else ""
+
+  def overall_sheets_selection(self, add_segid=None,trim_ends_by=None):
+    selections = []
     for sheet in self.sheets:
       try:
         selections.extend(sheet.as_atom_selections(add_segid=add_segid,
           trim_ends_by=trim_ends_by))
       except RuntimeError as e :
         pass
-    return "(" + ") or (".join(selections) + ")"
+    return "(" + ") or (".join(selections) + ")" if len(selections) > 0 else ""
+
 
   def overall_helix_selection(self,
                               add_segid=None,
@@ -2450,8 +2490,6 @@ class pdb_sheet(structure_base):
         })
       if i == 1:
         # the first strand, no sense, no hbond
-        if len(f_rows) != 1:
-          raise Sorry("Error in sheet definitions")
         strands.append(pdb_strand.from_cif_dict(f_rows[0], 0))
         registrations.append(None)
       else:

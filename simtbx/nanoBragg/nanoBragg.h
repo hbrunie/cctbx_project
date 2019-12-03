@@ -456,7 +456,6 @@ class nanoBragg {
     bool timelog;
     int device_Id;
     cudaPointers cpo;
-#endif
     /* special options */
 //    bool calculate_noise; // = 1;
 //    bool write_pgm; // = 1;

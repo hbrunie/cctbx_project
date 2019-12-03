@@ -2281,10 +2281,10 @@ class array(set):
     """
     Takes in an intensity array (including negatives) and spits out amplitudes.
     The basic assumption is that
-    P(Itrue) \propto exp(-(Itrue-Iobs)**2/(2*s))
+    P(Itrue) \\propto exp(-(Itrue-Iobs)**2/(2*s))
     where Itrue>=0 (positivity constraint on error free amplitudes).
     For amplitudes, this results in
-    P(Ftrue) \propto 2 Ftrue exp( -(Ftrue**2-Iobs)**2/(2s) )
+    P(Ftrue) \\propto 2 Ftrue exp( -(Ftrue**2-Iobs)**2/(2s) )
     A Gaussian approximation is fitted to the Mode of this distribution.
     An analytical solution exists and is implemented below.
     This method does not require any Wilson statistics assumptions.
@@ -3316,7 +3316,7 @@ class array(set):
     """Get the R1 factor according to this formula
 
     .. math::
-       R1 = \dfrac{\sum{||F| - k|F'||}}{\sum{|F|}}
+       R1 = \\dfrac{\\sum{||F| - k|F'||}}{\\sum{|F|}}
 
     where F is self.data() and F' is other.data() and
     k is the factor to put F' on the same scale as F
@@ -4086,6 +4086,8 @@ class array(set):
     d_inv, fsc = smoothing.savitzky_golay_filter(
       x=d_inv,  y=fsc,  half_window=half_window, degree=2)
     s = flex.sort_permutation(d_inv)
+    if fsc.size() != d.size(): # happens if bin width too big
+      return None
     return group_args(d=d.select(s), d_inv=d_inv.select(s), fsc=fsc.select(s))
 
   def d_min_from_fsc(self, other=None, fsc_curve=None, bin_width=1000,
@@ -4097,6 +4099,7 @@ class array(set):
     if(fsc_curve is None):
       assert other is not None
       fsc_curve = self.fsc(other=other, bin_width=bin_width)
+      if not fsc_curve: return group_args(fsc=None, d_min=None)
     else:
       assert other is None
     i_mid = None
@@ -4111,7 +4114,11 @@ class array(set):
       d_mid = fsc_curve.d[i_mid]
       if(i_mid is not None):
         i_min = i_mid-5
+        if i_min < 0:
+          i_min = 0
         i_max = i_mid+6
+        if i_max >= len(fsc_curve.fsc):
+          i_max = len(fsc_curve.fsc) - 1
         on_slope=True
         if(fsc_cutoff>0.): # does not have to be on slope around fsc_cutoff=0
           on_slope = [
@@ -4457,7 +4464,9 @@ class array(set):
 
   def export_as_shelx_hklf(self,
         file_object=None,
-        normalise_if_format_overflow=False):
+        normalise_if_format_overflow=False,
+        full_dynamic_range=False,
+        scale_range=None):
     """
     Write reflections to a SHELX-format .hkl file.
     """
@@ -4465,7 +4474,9 @@ class array(set):
     hklf.miller_array_export_as_shelx_hklf(
       miller_array=self,
       file_object=file_object,
-      normalise_if_format_overflow=normalise_if_format_overflow)
+      normalise_if_format_overflow=normalise_if_format_overflow,
+      full_dynamic_range=full_dynamic_range,
+      scale_range=scale_range)
 
   def export_as_cns_hkl(self,
         file_object,
@@ -5424,6 +5435,7 @@ class merge_equivalents(object):
     assert algorithm in ["gaussian", "shelx"]
     self._r_linear = None
     self._r_square = None
+    sigmas = None
     self._r_int = self._r_merge = self._r_meas = self._r_pim = None
     self._inconsistent_equivalents = None
     self.n_incompatible_flags = None
@@ -5455,7 +5467,7 @@ class merge_equivalents(object):
       del asu_array
       if hasattr(merge_ext, "n_incompatible_flags"):
         self.n_incompatible_flags = merge_ext.n_incompatible_flags
-    elif (isinstance(miller_array.data(), flex.double)):
+    elif (isinstance(miller_array.data(), flex.double) ):
       asu_set = set.map_to_asu(miller_array)
       perm = asu_set.sort_permutation(by_value="packed_indices")
       if (miller_array.sigmas() is not None):
@@ -5486,6 +5498,13 @@ class merge_equivalents(object):
       self._r_merge = merge_ext.r_merge
       self._r_meas = merge_ext.r_meas
       self._r_pim = merge_ext.r_pim
+    elif (isinstance(miller_array.data(), flex.std_string) ):
+      asu_array = miller_array.map_to_asu()
+      perm = asu_array.sort_permutation(by_value="packed_indices")
+      merge_ext = ext.merge_equivalents_string(
+        asu_array.indices().select(perm),
+        miller_array.data().select(perm))
+      del asu_array
     else:
       raise RuntimeError(
         "cctbx.miller.merge_equivalents: unsupported array type:\n"
@@ -5532,7 +5551,7 @@ class merge_equivalents(object):
     Standard (but flawed) metric of dataset internal consistency.
 
     .. math::
-       R_{merge} = \dfrac{\sum_{hkl}{\sum_{i}{|I_{i}(hkl) - \left \langle I_{i}(hkl) \\right \\rangle|}}}{\sum_{hkl}{\sum_{i}{I_{i}(hkl)}}}
+       R_{merge} = \\dfrac{\\sum_{hkl}{\\sum_{i}{|I_{i}(hkl) - \\left \\langle I_{i}(hkl) \\right \\rangle|}}}{\\sum_{hkl}{\\sum_{i}{I_{i}(hkl)}}}
     """
     return self._r_merge
 

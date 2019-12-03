@@ -22,7 +22,7 @@ import cctbx.miller
 from cctbx.uctbx import unit_cell
 from cctbx import sgtbx
 import operator
-from dxtbx.model.experiment_list import ExperimentListFactory, ExperimentListDumper
+from dxtbx.model.experiment_list import ExperimentListFactory
 
 from dials.algorithms.shoebox import MaskCode
 mask_peak = MaskCode.Valid|MaskCode.Foreground
@@ -318,8 +318,8 @@ def small_cell_index(path, horiz_phil):
   print("Loading %s"%path)
 
   # load the image
-  from dxtbx.format.Registry import Registry
-  format_class = Registry.find(path)
+  import dxtbx.format.Registry
+  format_class = dxtbx.format.Registry.get_format_class_for_file(path)
   img = format_class(path)
   imageset = img.get_imageset([path])
   raw_data = img.get_raw_data()
@@ -347,7 +347,7 @@ def small_cell_index(path, horiz_phil):
     sel.append(test.count(True) == 0)
   reflections = reflections.select(sel)
 
-  reflections_dump(reflections, "spotfinder.pickle")
+  reflections_dump(reflections, "spotfinder.refl")
   print("saved %d"%len(reflections))
 
   max_clique_len, experiments, refls = small_cell_index_detail(experiments, reflections, horiz_phil)
@@ -381,7 +381,7 @@ def small_cell_index_detail(experiments, reflections, horiz_phil, write_output =
   radial_sizes = flex.double()
   azimuthal_sizes = flex.double()
   s0_projs = flex.vec3_double()
-  for ref in reflections:
+  for ref in reflections.rows():
     # calculate reciprical space coordinates
     x, y, z = ref['xyzobs.px.value']
     panel = detector[ref['panel']]
@@ -438,11 +438,11 @@ def small_cell_index_detail(experiments, reflections, horiz_phil, write_output =
 
   from dials.algorithms.indexing.assign_indices import AssignIndicesGlobal
   reflections['imageset_id'] = reflections['id']
-  reflections.centroid_px_to_mm(detector)
-  reflections.map_centroids_to_reciprocal_space(detector, beam)
+  reflections.centroid_px_to_mm(experiments)
+  reflections.map_centroids_to_reciprocal_space(experiments)
 
   all_spots = []
-  for i, ref in enumerate(reflections):
+  for i, ref in enumerate(reflections.rows()):
     all_spots.append(small_cell_spot(ref, i))
 
   # Unit cell calculated from indexed virtual powder diffraction
@@ -901,7 +901,7 @@ def small_cell_index_detail(experiments, reflections, horiz_phil, write_output =
       reflections = ref_predictor(reflections)
 
       indexed = []
-      for i, ref in enumerate(reflections):
+      for i, ref in enumerate(reflections.rows()):
         if ref['id'] < 0: continue
         spot = small_cell_spot(ref, i)
         spot.pred = ref['xyzcal.px'][0:2]
@@ -1083,8 +1083,9 @@ def small_cell_index_detail(experiments, reflections, horiz_phil, write_output =
         crystal = ori_to_crystal(ori, horiz_phil.small_cell.spacegroup)
         experiments = ExperimentListFactory.from_imageset_and_crystal(imageset, crystal)
         if write_output:
-          dump = ExperimentListDumper(experiments)
-          dump.as_json(os.path.splitext(os.path.basename(path).strip())[0]+"_integrated_experiments.json")
+          experiments.as_file(
+            os.path.splitext(os.path.basename(path).strip())[0] + "_integrated.expt"
+          )
 
         refls = flex.reflection_table()
         refls['id'] = flex.int(len(indexed_hkls), 0)
@@ -1100,11 +1101,11 @@ def small_cell_index_detail(experiments, reflections, horiz_phil, write_output =
         refls['s1'] = s1
         refls['bbox'] = bbox
 
-        refls.centroid_px_to_mm(detector)
+        refls.centroid_px_to_mm(experiments)
 
         refls.set_flags(flex.bool(len(refls), True), refls.flags.indexed)
         if write_output:
-          refls.as_pickle(os.path.splitext(os.path.basename(path).strip())[0]+"_integrated.pickle")
+          refls.as_pickle(os.path.splitext(os.path.basename(path).strip())[0]+"_integrated.refl")
 
         print("cctbx.small_cell: integrated %d spots."%len(results), end=' ')
         integrated_count = len(results)

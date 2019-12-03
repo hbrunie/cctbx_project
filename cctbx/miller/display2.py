@@ -7,8 +7,9 @@ from libtbx.utils import Sorry, to_str
 from cctbx import miller
 from cctbx.array_family import flex
 import libtbx.phil
-from libtbx import object_oriented_patterns as oop
+from libtbx import object_oriented_patterns as oop # causes crash in easy_mp.multi_core_run
 from math import sqrt
+import math, traceback
 import math
 from six.moves import zip
 
@@ -47,7 +48,7 @@ def nth_power_scale(dataarray, nth_power):
   If nth_power < 0 then an automatic value is computed that maps the smallest
   values to 0.1 of the largest values
   """
-  absdat = flex.abs(dataarray)
+  absdat = flex.abs(dataarray).as_double()
   absdat2 = flex.double([e for e in absdat if not math.isnan(e)])
   maxdat = flex.max(absdat2)
   mindat = max(1e-10*maxdat, flex.min(absdat2) )
@@ -72,8 +73,8 @@ def ExtendMillerArray(miller_array, nsize, indices=None ):
 
 def ExtendAnyData(data, nsize):
   if isinstance(data, flex.bool):
-    data.extend( flex.bool(nsize, False) )
-  # insert NAN values as default values for real and integer values
+    # flex.bool cannot be extended with NaN so cast the data to ints and extend with inanval instead
+    data = data.as_int().extend( flex.int(nsize, inanval) )
   if isinstance(data, flex.hendrickson_lattman):
     data.extend( flex.hendrickson_lattman(nsize, (nanval, nanval, nanval, nanval)) )
   if isinstance(data, flex.int) or isinstance(data, flex.long) \
@@ -86,6 +87,31 @@ def ExtendAnyData(data, nsize):
   if isinstance(data, flex.vec3_double):
     data.extend( flex.vec3_double(nsize, (1.,1.,1.)) )
   return data
+
+
+def MergeData(array, show_anomalous_pairs=False):
+  if show_anomalous_pairs:
+    merge = array.merge_equivalents()
+    multiplicities = merge.redundancies()
+    asu, matches = multiplicities.match_bijvoet_mates()
+    mult_plus, mult_minus = multiplicities.hemispheres_acentrics()
+    anom_mult = flex.int(
+      min(p, m) for (p, m) in zip(mult_plus.data(), mult_minus.data()))
+    #flex.min_max_mean_double(anom_mult.as_double()).show()
+    anomalous_multiplicities = miller.array(
+      miller.set(asu.crystal_symmetry(),
+                 mult_plus.indices(),
+                 anomalous_flag=False), anom_mult)
+    anomalous_multiplicities = anomalous_multiplicities.select(
+      anomalous_multiplicities.data() > 0)
+
+    array = anomalous_multiplicities
+    multiplicities = anomalous_multiplicities
+  else:
+    merge = array.merge_equivalents()
+    array = merge.array()
+    multiplicities = merge.redundancies()
+  return array, multiplicities, merge
 
 
 class scene(object):
@@ -110,6 +136,7 @@ class scene(object):
     self.multiplicities = None
     self.fomlabel = ""
     self.foms = flex.double(self.miller_array.size(), float('nan'))
+    self._is_using_foms = False
     self.fullprocessarray = fullprocessarray
     if self.miller_array.is_complex_array():
       # Colour map coefficient as a circular rainbow with saturation as a function of FOMs
@@ -121,6 +148,7 @@ class scene(object):
           return
         self.foms = self.foms_workarray.data()
         self.fomlabel = foms_array.info().label_string()
+        self._is_using_foms = True
     self.work_array, self.multiplicities = self.process_input_array(self.miller_array)
     if not self.work_array:
       return
@@ -140,6 +168,7 @@ class scene(object):
     index_span = array.index_span()
     self.colourlabel = self.miller_array.info().labels[0]
     self.d_min = array.d_min()
+    self.min_dist = 0.0
     self.hkl_range = index_span.abs_range()
     self.axes = [ uc.reciprocal_space_vector((self.hkl_range[0],0,0)),
                   uc.reciprocal_space_vector((0,self.hkl_range[1],0)),
@@ -197,29 +226,10 @@ class scene(object):
     multiplicities = None
     try:
       if self.merge_equivalents :
-        if self.settings.show_anomalous_pairs:
-          merge = array.merge_equivalents()
-          multiplicities = merge.redundancies()
-          asu, matches = multiplicities.match_bijvoet_mates()
-          mult_plus, mult_minus = multiplicities.hemispheres_acentrics()
-          anom_mult = flex.int(
-            min(p, m) for (p, m) in zip(mult_plus.data(), mult_minus.data()))
-          #flex.min_max_mean_double(anom_mult.as_double()).show()
-          anomalous_multiplicities = miller.array(
-            miller.set(asu.crystal_symmetry(),
-                       mult_plus.indices(),
-                       anomalous_flag=False), anom_mult)
-          anomalous_multiplicities = anomalous_multiplicities.select(
-            anomalous_multiplicities.data() > 0)
-
-          array = anomalous_multiplicities
-          multiplicities = anomalous_multiplicities
-        else:
-          merge = array.merge_equivalents()
-          array = merge.array()
-          multiplicities = merge.redundancies()
+        array, multiplicities, merge = MergeData(array, self.settings.show_anomalous_pairs)
       settings = self.settings
       data = array.data()
+      #import code, traceback; code.interact(local=locals(), banner="".join( traceback.format_stack(limit=10) ) )
       self.missing_set = oop.null()
       #if (array.is_xray_intensity_array()):
       #  data.set_selected(data < 0, flex.double(data.size(), 0.))
@@ -227,6 +237,7 @@ class scene(object):
         array = array.map_to_asu()
         if (multiplicities is not None):
           multiplicities = multiplicities.map_to_asu()
+
       if (settings.d_min is not None):
         array = array.resolution_filter(d_min=settings.d_min)
         if (multiplicities is not None):
@@ -234,6 +245,8 @@ class scene(object):
             d_min=settings.d_min)
       self.filtered_array = array.deep_copy()
       if (settings.expand_anomalous):
+        if not array.is_unique_set_under_symmetry():
+          raise Sorry("Error! Cannot generate bijvoet mates of unmerged reflections.")
         array = array.generate_bijvoet_mates()
         original_symmetry = array.crystal_symmetry()
 
@@ -245,6 +258,8 @@ class scene(object):
           self.missing_set = self.missing_set.select(
             self.missing_set.centric_flags().data(), negate=True)
       if (settings.expand_to_p1):
+        if not array.is_unique_set_under_symmetry():
+          raise Sorry("Error! Cannot expand unmerged reflections to P1.")
         original_symmetry = array.crystal_symmetry()
         array = array.expand_to_p1().customized_copy(
           crystal_symmetry=original_symmetry)
@@ -266,12 +281,12 @@ class scene(object):
         data_as_float = flex.double(data.size(), 0.0)
         data_as_float.set_selected(data==True, flex.double(data.size(), 1.0))
         data = data_as_float
-        self.data = data.deep_copy()
+        self.data = data #.deep_copy()
       else :
         if isinstance(data, flex.double):
-          self.data = data.deep_copy()
+          self.data = data #.deep_copy()
         elif isinstance(data, flex.complex_double):
-          self.data = data.deep_copy()
+          self.data = data #.deep_copy()
           self.ampl = flex.abs(data)
           self.phases = flex.arg(data) * 180.0/math.pi
           # purge nan values from array to avoid crash in fmod_positive()
@@ -284,7 +299,7 @@ class scene(object):
           # replace the nan values with an arbitrary float value
           self.radians = self.radians.set_selected(b, 0.424242)
         elif hasattr(array.data(), "as_double"):
-          self.data = array.data().as_double()
+          self.data = data
         else:
           raise RuntimeError("Unexpected data type: %r" % data)
         if (settings.show_data_over_sigma):
@@ -303,7 +318,8 @@ class scene(object):
           self.sigmas = None
       work_array = array
     except Exception as e:
-      print(to_str(e))
+      print(to_str(e) + "".join(traceback.format_stack(limit=10)))
+      raise e
       return None, None
     work_array.set_info(arr.info() )
     multiplicities = multiplicities
@@ -330,16 +346,17 @@ class scene(object):
     elif isinstance(data, flex.complex_double):
       data_for_colors = self.radians
       foms_for_colours = self.foms
-      self.colourlabel = self.miller_array.info().labels[1]
+       # assuming last part of the labels indicates the phase label as in ["FCALC","PHICALC"]
+      self.colourlabel = self.miller_array.info().labels[-1]
     elif (settings.sigma_color) and sigmas is not None:
       data_for_colors = sigmas.as_double()
-      self.colourlabel = self.miller_array.info().labels[1]
+      self.colourlabel = self.miller_array.info().labels[-1]
     else :
       data_for_colors = flex.abs(data.deep_copy())
     uc = self.work_array.unit_cell()
-    min_dist = min(uc.reciprocal_space_vector((1,1,1)))
-    min_radius = 0.5 * min_dist
-    max_radius = 45 * min_dist
+    self.min_dist = min(uc.reciprocal_space_vector((1,1,1))) * self.renderscale
+    min_radius = 0.05 * self.min_dist
+    max_radius = 0.45 * self.min_dist
     if ((self.multiplicities is not None) and
         (settings.scale_radii_multiplicity)):
       data_for_radii = self.multiplicities.data().as_double()
@@ -386,8 +403,9 @@ class scene(object):
     #if (settings.sqrt_scale_radii) and (not settings.scale_radii_multiplicity):
     #  data_for_radii = flex.sqrt(flex.abs(data_for_radii))
     if len(data_for_radii):
-      dat2 = flex.double([e for e in data_for_radii if not math.isnan(e)])
-      scale = max_radius/flex.max(dat2)
+      dat2 = flex.abs(flex.double([e for e in data_for_radii if not math.isnan(e)]))
+      # don't divide by 0 if dealing with selection of Rfree array where all values happen to be zero
+      scale = max_radius/(flex.max(dat2) + 0.001)
       radii = data_for_radii * (self.settings.scale * scale)
       assert radii.size() == colors.size()
     else:
@@ -403,7 +421,8 @@ class scene(object):
 
 
   def isUsingFOMs(self):
-    return len([e for e in self.foms if math.isnan(e)]) != self.foms.size()
+    #return len([e for e in self.foms if math.isnan(e)]) != self.foms.size()
+    return self._is_using_foms
 
 
   def ExtendData(self, nextent):
@@ -454,7 +473,7 @@ class scene(object):
         self.colors.extend(flex.vec3_double(n_missing, (1.,0,0)))
       else :
         self.colors.extend(flex.vec3_double(n_missing, (1.,1.,1.)))
-      self.radii.extend(flex.double(n_missing, self.max_radius/2.0 ))
+      self.radii.extend(flex.double(n_missing, self.settings.scale * self.max_radius/2.0 ))
       self.missing_flags.extend(flex.bool(n_missing, True))
       self.indices.extend(missing)
       self.ExtendData(n_missing)
@@ -491,13 +510,16 @@ class scene(object):
         #  self.missing_flags[j_seq] = False
         #  self.sys_absent_flags[j_seq] = True
         #else :
-        new_indices.append(hkl)
+        if hkl in self.indices:
+          print("Systematically absent reflection %s is unexpectedly present in %s" %(hkl, array.info().label_string()) )
+        else:
+          new_indices.append(hkl)
       if (new_indices.size() > 0):
         uc = self.work_array.unit_cell()
         points = uc.reciprocal_space_vector(new_indices) * 100
         self.points.extend(points)
         n_sys_absent = new_indices.size()
-        self.radii.extend(flex.double(new_indices.size(), self.max_radius))
+        self.radii.extend(flex.double(new_indices.size(), self.max_radius/2.0))
         self.indices.extend(new_indices)
         self.missing_flags.extend(flex.bool(new_indices.size(), False))
         self.sys_absent_flags.extend(flex.bool(new_indices.size(), True))
@@ -658,7 +680,7 @@ philstr = """
     .type = bool
   show_data_over_sigma = False
     .type = bool
-  nth_power_scale_radii = -1.0
+  nth_power_scale_radii = 0.0
     .type = float
   sqrt_scale_colors = False
     .type = bool
@@ -671,6 +693,8 @@ philstr = """
   expand_to_p1 = False
     .type = bool
   expand_anomalous = False
+    .type = bool
+  inbrowser = True
     .type = bool
   show_missing = False
     .type = bool

@@ -264,7 +264,7 @@ class manager(object):
       # input xray_structure most likely don't have proper crystal symmetry
       if self.crystal_symmetry() is None:
         inp_cs = self._model_input.crystal_symmetry()
-        if inp_cs and not inp_cs.is_empty() and not inp_cs.is_nonsence():
+        if inp_cs and not inp_cs.is_empty() and not inp_cs.is_nonsense():
           self._crystal_symmetry = inp_cs
       if expand_with_mtrix:
         self.expand_with_MTRIX_records()
@@ -375,6 +375,12 @@ class manager(object):
   def set_log(self, log):
     self.log = log
 
+  def set_stop_for_unknowns(self, value):
+    self._stop_for_unknowns=value
+
+  def get_stop_for_unknowns(self):
+    return self._stop_for_unknowns
+
   def set_shift_manager(self, shift_manager):
     self._shift_manager = shift_manager
     if shift_manager is not None:
@@ -442,7 +448,6 @@ class manager(object):
     pep_link_params.rama_potential = rama_potential
     ramachandran_restraints_manager = ramachandran.ramachandran_manager(
       pdb_hierarchy  = self.get_hierarchy(),
-      atom_selection = pep_link_params.rama_selection,
       params         = pep_link_params,
       log            = null_out())
     grm.set_ramachandran_restraints(manager = ramachandran_restraints_manager)
@@ -807,11 +812,7 @@ class manager(object):
     result = StringIO()
     # outputting HELIX/SHEET records
     ss_records = ""
-    ss_ann = None
-    if self._ss_manager is not None:
-      ss_ann = self._ss_manager.actual_sec_str
-    elif self.get_ss_annotation() is not None:
-      ss_ann = self.get_ss_annotation()
+    ss_ann = self._get_ss_annotations_for_output()
     if ss_ann is not None:
       ss_records = ss_ann.as_pdb_str()
     if ss_records != "":
@@ -895,6 +896,17 @@ class manager(object):
           break
     return restraints
 
+  def _get_ss_annotations_for_output(self):
+    ss_ann = None
+    if self._ss_manager is not None:
+      ss_ann = self._ss_manager.actual_sec_str
+    elif self.get_ss_annotation() is not None:
+      ss_ann = self.get_ss_annotation()
+    if ss_ann is not None:
+      ss_ann.remove_empty_annotations(self.get_hierarchy(),
+          self.get_atom_selection_cache())
+    return ss_ann
+
   def model_as_mmcif(self,
       cif_block_name = "default",
       output_cs = True,
@@ -946,11 +958,7 @@ class manager(object):
       self.get_model_statistics_info()
     # outputting HELIX/SHEET records
     ss_cif_loops = []
-    ss_ann = None
-    if self._ss_manager is not None:
-      ss_ann = self._ss_manager.actual_sec_str
-    elif self.get_ss_annotation() is not None:
-      ss_ann = self.get_ss_annotation()
+    ss_ann = self._get_ss_annotations_for_output()
     if ss_ann is not None:
       ss_cif_loops = ss_ann.as_cif_loops()
     for loop in ss_cif_loops:
@@ -1108,7 +1116,8 @@ class manager(object):
     self._processed_pdb_file = None
 
   def raise_clash_guard(self):
-    err_msg = self._processed_pdb_file.clash_guard()
+    # This is done for phenix.refine when run with shaking coordinates
+    err_msg = self._processed_pdb_file.clash_guard(new_sites_cart=self.get_sites_cart())
     if err_msg is not None:
       raise Sorry(err_msg)
 
@@ -2495,6 +2504,7 @@ class manager(object):
       hd_sel                      = self.selection("element H or element D"))
 
   def percent_of_single_atom_residues(self, macro_molecule_only=True):
+    # XXX Should be a method of pdb.hierarchy
     sizes = flex.int()
     h = self.get_hierarchy()
     if(macro_molecule_only):
@@ -2532,6 +2542,9 @@ class manager(object):
     new_riding_h_manager = None
     if self.riding_h_manager is not None:
       new_riding_h_manager = self.riding_h_manager.select(selection)
+    xrs_new = None
+    if(self._xray_structure is not None):
+      xrs_new = self.get_xray_structure().select(selection)
     new = manager(
       model_input                = self._model_input, # any selection here?
       crystal_symmetry           = self._crystal_symmetry,
@@ -2539,7 +2552,7 @@ class manager(object):
       monomer_parameters         = self._monomer_parameters,
       restraints_manager         = new_restraints_manager,
       expand_with_mtrix          = False,
-      xray_structure             = self.get_xray_structure().select(selection),
+      xray_structure             = xrs_new,
       pdb_hierarchy              = new_pdb_hierarchy,
       pdb_interpretation_params  = self._pdb_interpretation_params,
       tls_groups                 = self.tls_groups, # XXX not selected, potential bug
@@ -2568,6 +2581,7 @@ class manager(object):
     new._update_master_sel()
     new._mon_lib_srv = self._mon_lib_srv
     new._ener_lib = self._ener_lib
+    new._original_model_format = self._original_model_format
     return new
 
   def number_of_ordered_solvent_molecules(self):
@@ -3022,7 +3036,7 @@ class manager(object):
       rm = rm.select(not_hd_sel)
     if(use_hydrogens is None):
       if(self.riding_h_manager is not None or
-         scattering_table in ["n_gaussian","wk1995", "it1992"]):
+         scattering_table in ["n_gaussian","wk1995", "it1992", "electron"]):
         not_hd_sel = ~hd_selection
         ph = ph.select(not_hd_sel)
         rm = rm.select(not_hd_sel)

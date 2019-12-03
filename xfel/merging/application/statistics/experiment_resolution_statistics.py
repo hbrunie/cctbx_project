@@ -8,6 +8,9 @@ from xfel.merging.application.reflection_table_utils import reflection_table_uti
 class experiment_resolution_statistics(worker):
   '''Calculates experiments accepted vs resolution bins'''
 
+  def __init__(self, params, mpi_helper=None, mpi_logger=None):
+    super(experiment_resolution_statistics, self).__init__(params=params, mpi_helper=mpi_helper, mpi_logger=mpi_logger)
+
   def __repr__(self):
     return 'Lattices resolution'
 
@@ -81,11 +84,12 @@ class experiment_resolution_statistics(worker):
 
     # Accumulate experiment ids in the resolution bins where those experiments contributed reflections
     for refls in reflection_table_utils.get_next_hkl_reflection_table(reflections=reflections):
-      assert refls.size() > 0
+      if refls.size() == 0:
+        break # unless the input "reflections" list is empty, generated "refls" lists cannot be empty
       hkl = refls[0]['miller_index_asymmetric']
       if hkl in self.hkl_resolution_bins:
         i_bin = self.hkl_resolution_bins[hkl]
-        for refl in refls:
+        for refl in refls.rows():
           experiments_per_resolution_bins[i_bin].add(refl['exp_id'])
 
     # For each bin, reduce the sets of unique experiment ids to their count

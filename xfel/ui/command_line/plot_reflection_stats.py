@@ -6,6 +6,7 @@ from six.moves import range
 from matplotlib import pyplot as plt
 from xfel.command_line.detector_residuals import setup_stats
 from dials.array_family import flex
+from dials.util import show_mail_on_error
 import math
 from libtbx.phil import parse
 from scitbx.math import five_number_summary
@@ -21,7 +22,7 @@ For each plot, the median value per two theta bin is plotted.  The shaded area c
 N reflections per two theta bin is also plotted.
 
 Example:
-cctbx.xfel.plot_reflection_stats integrated1.json integrated1.pickle integrated2.json integrated2.pickle
+cctbx.xfel.plot_reflection_stats integrated1.expt integrated1.refl integrated2.expt integrated2.refl
 """
 
 phil_str = """
@@ -182,9 +183,6 @@ class Script(object):
       plt.show()
 
 if __name__ == '__main__':
-  from dials.util import halraiser
-  try:
+  with show_mail_on_error():
     script = Script()
     script.run()
-  except Exception as e:
-    halraiser(e)

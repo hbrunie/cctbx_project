@@ -120,8 +120,9 @@ nanoBragg::nanoBragg(
     unitize(spindle_vector,spindle_vector);
 
     /* NOT IMPLEMENTED: read in any other stuff?  */
-    if(verbose)
-        show_params();
+    /*TODO: consider reading in a crystal model as well, showing params without crystal model can be confusing*/
+    if (verbose)
+      show_params();
 
     /* sensible initialization of all unititialized values */
     reconcile_parameters();
@@ -267,7 +268,9 @@ nanoBragg::init_defaults()
     printout = 0;
     printout_spixel=printout_fpixel=-1;
     verbose = 1;
-    device_Id=0;
+#ifdef NANOBRAGG_HAVE_CUDA
+    device_Id = 0; // for running the CUDA code
+#endif
 
     /* default x-ray beam properties */
 //    double beam_vector[4] = {0,1,0,0};  this->beam_vector = beam_vector;
@@ -1992,7 +1995,6 @@ nanoBragg::init_sources()
         double flux_sum = 0.0, lambda_sum = 0.0, polar_sum = 0.0, div_sum = 0.0;
         for (i=0; i < sources; ++i)
         {
-            //xyz = pythony_beams[i].get_direction();
             xyz = pythony_beams[i].get_sample_to_source_direction();
             source_X[i] = xyz[0];
             source_Y[i] = xyz[1];
@@ -2761,7 +2763,7 @@ nanoBragg::add_nanoBragg_spots()
                                 }
 
                                 /* convert amplitudes into intensity (photons per steradian) */
-                                I += F_cell*F_cell*F_latt*F_latt*source_I[source]*capture_fraction;
+                                    I += F_cell*F_cell*F_latt*F_latt*source_I[source]*capture_fraction*omega_pixel;
                             }
                             /* end of mosaic loop */
                         }
@@ -2775,7 +2777,7 @@ nanoBragg::add_nanoBragg_spots()
             }
             /* end of sub-pixel x loop */
 
-            floatimage[i] += r_e_sqr*fluence*spot_scale*polar*I/steps*omega_pixel;
+            floatimage[i] += r_e_sqr*fluence*spot_scale*polar*I/steps;
 //          floatimage[i] = test;
             if(floatimage[i] > max_I) {
                 max_I = floatimage[i];

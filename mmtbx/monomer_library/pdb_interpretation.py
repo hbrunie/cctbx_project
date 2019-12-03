@@ -135,11 +135,24 @@ restraints_library_str = """
       .help = Use Conformation Dependent Library (CDL) \
         for geometry restraints
       .style = bold
+    mcl = True
+      .type = bool
+      .short_caption = Use Metal Coordination Library (MCL)
+      .help = Use Metal Coordination Library (MCL) \
+        for tetrahedral Zn++ and iron-sulfur clusters SF4, FES, F3S, ...
+      .style = bold
+    cis_pro_eh99 = False
+      .type = bool
+      .style = hidden
     omega_cdl = False
       .type = bool
       .short_caption = Use Omega Conformation-Dependent Library
       .help = Use Omega Conformation Dependent Library (omega-CDL) \
         for geometry restraints
+      .style = hidden
+    cdl_svl = False
+      .type = bool
+      .short_caption = Use improved SVL values for CDL classes
       .style = hidden
     rdl = False
       .type = bool
@@ -158,7 +171,7 @@ master_params_str = """\
     .short_caption = Sort atoms in input pdb so they would be in the same order
   superpose_ideal_ligand = *None all %(ideal_ligands_str)s
     .type = choice(multi=True)
-    .short_caption = Substitute correctly oriented F3S metal cluster
+    .short_caption = Substitute correctly oriented SF4 metal cluster
   flip_symmetric_amino_acids = False
     .type = bool
     .short_caption = Flip symmetric amino acids to conform to IUPAC convention
@@ -4275,9 +4288,12 @@ class build_all_chain_proxies(linking_mixins):
     self.pdb_link_records.setdefault("LINK", [])
     for bond in params.bond:
       def show_atom_selections():
+        print(get_atom_selections_text(), end='', file=log)
+      def get_atom_selections_text():
+        txt = ""
         for attr in sel_attrs:
-          print("      %s = %s" % (
-            attr, show_string(getattr(bond, attr, None))), file=log)
+          txt += "      %s = %s\n" % (attr, show_string(getattr(bond, attr, None)))
+        return txt
       slack = bond.slack
       if (slack is None or slack < 0):
         slack = 0
@@ -4298,12 +4314,19 @@ class build_all_chain_proxies(linking_mixins):
         print("      distance_ideal = %.6g" % bond.distance_ideal, file=log)
         print("      sigma = %.6g" % bond.sigma, file=log)
         print("      slack = %.6g" % slack, file=log)
-      elif (bond.action != "add"):
+      elif (bond.action == "delete"):
         raise Sorry("%s = %s not implemented." %
           bond.__phil_path_and_value__(object_name="action"))
       else:
         i_seqs = self.phil_atom_selections_as_i_seqs(
           cache=sel_cache, scope_extract=bond, sel_attrs=sel_attrs)
+        bond_exist = self.geometry_proxy_registries.bond_simple.is_proxy_set(i_seqs)
+        if bond_exist and bond.action == 'add':
+          txt = get_atom_selections_text()
+          raise Sorry("Bond below exists, use action=change instead.\n" + txt)
+        if not bond_exist and bond.action == 'change':
+          txt = get_atom_selections_text()
+          raise Sorry("Bond below does not exists, use action=add instead.\n" + txt)
         if (bond.symmetry_operation is None):
           s = "x,y,z"
         else:
@@ -4362,7 +4385,7 @@ class build_all_chain_proxies(linking_mixins):
       raise Sorry(
         "Custom bonds with excessive length: %d\n"
         "  Please check the log file for details." % n_excessive)
-    print("    Total number of custom bonds:", len(bond_sym_proxies), file=log)
+    print("    Total number of added/changed bonds:", len(bond_sym_proxies), file=log)
     return group_args(
       bond_sym_proxies=bond_sym_proxies,
       bond_distance_model_max=bond_distance_model_max)
@@ -4380,12 +4403,16 @@ class build_all_chain_proxies(linking_mixins):
       special_position_indices = self.special_position_indices
     print("  Custom angles:", file=log)
     atoms = self.pdb_atoms
+    n_changed_angles = 0
     sel_attrs = ["atom_selection_"+n for n in ["1", "2", "3"]]
     for angle in params.angle:
       def show_atom_selections():
+        print(get_atom_selections_text(), end='', file=log)
+      def get_atom_selections_text():
+        txt = ""
         for attr in sel_attrs:
-          print("      %s = %s" % (
-            attr, show_string(getattr(angle, attr, None))), file=log)
+          txt += "      %s = %s\n" % (attr, show_string(getattr(angle, attr, None)))
+        return txt
       if (angle.angle_ideal is None):
         print("    Warning: Ignoring angle with angle_ideal = None:", file=log)
         show_atom_selections()
@@ -4403,10 +4430,14 @@ class build_all_chain_proxies(linking_mixins):
         i_seqs = self.phil_atom_selections_as_i_seqs(
           cache=sel_cache, scope_extract=angle, sel_attrs=sel_attrs)
         i_proxy = self.geometry_proxy_registries.angle.lookup_i_proxy(i_seqs)
+        if i_proxy is None:
+          txt = get_atom_selections_text()
+          raise Sorry("Angle below is not restrained, nothing to change.\n" + txt)
         a_proxy = self.geometry_proxy_registries.angle.proxies[i_proxy]
         a_proxy.angle_ideal=angle.angle_ideal
         a_proxy.weight = geometry_restraints.sigma_as_weight(sigma=angle.sigma)
         a_proxy.origin_id=origin_ids.get_origin_id('edits')
+        n_changed_angles += 1
       elif (angle.action != "add"):
         raise Sorry("%s = %s not implemented." %
           angle.__phil_path_and_value__("action"))
@@ -4440,7 +4471,8 @@ class build_all_chain_proxies(linking_mixins):
             "  Please inspect the output for details."
               % plural_s(n_special))
         result.append(p)
-    print("    Total number of custom angles:", len(result), file=log)
+    print("    Total number of new custom angles:", len(result), file=log)
+    print("    Total number of changed angles:", n_changed_angles, file=log)
     return result
 
   def process_geometry_restraints_edits_dihedral(self, sel_cache, params, log):
@@ -4455,9 +4487,12 @@ class build_all_chain_proxies(linking_mixins):
     sel_attrs = ["atom_selection_"+n for n in ["1", "2", "3", "4"]]
     for dihedral in params.dihedral:
       def show_atom_selections():
+        print(get_atom_selections_text(), end='', file=log)
+      def get_atom_selections_text():
+        txt = ""
         for attr in sel_attrs:
-          print("      %s = %s" % (
-            attr, show_string(getattr(dihedral, attr, None))), file=log)
+          txt += "      %s = %s\n" % (attr, show_string(getattr(dihedral, attr, None)))
+        return txt
       if (dihedral.angle_ideal is None):
         print("    Warning: Ignoring dihedral with angle_ideal = None:", file=log)
         show_atom_selections()
@@ -4474,6 +4509,9 @@ class build_all_chain_proxies(linking_mixins):
         i_seqs = self.phil_atom_selections_as_i_seqs(
           cache=sel_cache, scope_extract=dihedral, sel_attrs=sel_attrs)
         i_proxy = self.geometry_proxy_registries.dihedral.lookup_i_proxy(i_seqs)[0]
+        if i_proxy is None:
+          txt = get_atom_selections_text()
+          raise Sorry("Angle below is not restrained, nothing to change.\n" + txt)
         a_proxy = self.geometry_proxy_registries.dihedral.proxies[i_proxy]
         a_proxy.angle_ideal=dihedral.angle_ideal
         a_proxy.weight = geometry_restraints.sigma_as_weight(sigma=dihedral.sigma)
@@ -5063,19 +5101,32 @@ class build_all_chain_proxies(linking_mixins):
       for proxy in processed_edits.bond_sym_proxies:
         if (proxy.weight <= 0): continue
         i_seq, j_seq = proxy.i_seqs
+        # print (dir(bond_params_table))
+        # STOP()
         bond_params_table.update(i_seq=i_seq, j_seq=j_seq, params=proxy)
         bond_asu_table.add_pair(
           i_seq=i_seq,
           j_seq=j_seq,
           rt_mx_ji=proxy.rt_mx_ji)
+      not_added_proxies = []
       for proxy in processed_edits.angle_proxies:
-        self.geometry_proxy_registries.angle.add_if_not_duplicated(proxy=proxy)
+        added = self.geometry_proxy_registries.angle.add_if_not_duplicated(proxy=proxy)
+        if not added:
+          not_added_proxies.append(proxy)
       for proxy in processed_edits.dihedral_proxies:
-        self.geometry_proxy_registries.dihedral.add_if_not_duplicated(proxy=proxy)
+        added = self.geometry_proxy_registries.dihedral.add_if_not_duplicated(proxy=proxy)
+        if not added:
+          not_added_proxies.append(proxy)
       for proxy in processed_edits.planarity_proxies:
-        self.geometry_proxy_registries.planarity.add_if_not_duplicated(proxy=proxy)
+        added = self.geometry_proxy_registries.planarity.add_if_not_duplicated(proxy=proxy)
+        if not added:
+          not_added_proxies.append(proxy)
       for proxy in processed_edits.parallelity_proxies:
-        self.geometry_proxy_registries.parallelity.add_if_not_duplicated(proxy=proxy)
+        added = self.geometry_proxy_registries.parallelity.add_if_not_duplicated(proxy=proxy)
+        if not added:
+          not_added_proxies.append(proxy)
+      if len(not_added_proxies) > 0:
+        raise Sorry("Some restraints were not added because they are already present.")
 
     if params_edits and params_edits.angle:
       processed_edits = self.process_geometry_restraints_edits(
@@ -5215,6 +5266,7 @@ class build_all_chain_proxies(linking_mixins):
     self.time_building_geometry_restraints_manager = timer.elapsed()
     restraints_source = "GeoStd + Monomer Library"
     use_cdl = self.params.restraints_library.cdl
+    cis_pro_eh99 = self.params.restraints_library.cis_pro_eh99
     if (use_cdl is Auto):
       use_cdl = self.pdb_inp.used_cdl_restraints()
       if (use_cdl):
@@ -5230,6 +5282,8 @@ class build_all_chain_proxies(linking_mixins):
         self.pdb_hierarchy,
         result,
         cdl_proxies=cdl_proxies,
+        cis_pro_eh99=cis_pro_eh99,
+        cdl_svl=self.params.restraints_library.cdl_svl,
         log=log,
         verbose=True,
         )
@@ -5519,11 +5573,11 @@ class process(object):
 
       # improved metal coordination
       automatic_linking = self.all_chain_proxies.params.automatic_linking
-      if automatic_linking.link_metals:
+      if self.all_chain_proxies.params.restraints_library.mcl:
         from mmtbx.conformation_dependent_library import mcl
         mcl.update(self._geometry_restraints_manager,
                    self.all_chain_proxies.pdb_hierarchy,
-                   self.all_chain_proxies.pdb_link_records,
+                   log=self.log,
                   )
 
       # Here we are going to add another needed restraints.
@@ -5751,7 +5805,8 @@ class process(object):
 
   def clash_guard(self,
                   hard_minimum_nonbonded_distance=0.001,
-                  nonbonded_distance_threshold=0.5):
+                  nonbonded_distance_threshold=0.5,
+                  new_sites_cart=None):
     params = self.all_chain_proxies.params.clash_guard
     if nonbonded_distance_threshold != 0.5:
       # WHY is this here???
@@ -5763,6 +5818,9 @@ class process(object):
     geo = self._geometry_restraints_manager
     if geo is None:
       return None
+    # This is done for phenix.refine when run with shaking coordinates
+    if new_sites_cart is not None:
+      geo.pair_proxies(sites_cart=new_sites_cart)
     n_below_threshold = (
       geo.nonbonded_model_distances() < params.nonbonded_distance_threshold) \
         .count(True)

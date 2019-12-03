@@ -144,9 +144,9 @@ class Cluster:
         for (dirpath, dirnames, filenames) in os.walk(arg):
           for filename in filenames:
             path = os.path.join(dirpath, filename)
-            if path.endswith("integrated.pickle"):
+            if path.endswith(("integrated.pickle", "integrated.refl")):
               dials_refls.append(path)
-            elif path.endswith("experiments.json"):
+            elif path.endswith(("experiments.json", "indexed.expt")):
               dials_expts.append(path)
 
     else:
@@ -157,8 +157,8 @@ class Cluster:
         for (dirpath, dirnames, filenames) in os.walk(arg):
           for filename in filenames:
             path = os.path.join(dirpath, filename)
-            if path.endswith(".pickle"):
-              print(path, "ends with .pickle")
+            if path.endswith((".pickle", ".refl")):
+              print(path, "ends with .pickle or .refl")
               pickles.append(path)
 
     return Cluster.from_files(pickle_list=pickles, dials_refls=dials_refls,
@@ -301,9 +301,9 @@ class Cluster:
       expts = []
       refls = []
       for path in raw:
-        if path.endswith(".pickle"):
+        if path.endswith((".pickle", ".refl")):
           refls.append(path)
-        elif path.endswith(".json"):
+        elif path.endswith((".json", ".expt")):
           expts.append(path)
       return (refls, expts)
 
@@ -483,7 +483,7 @@ class Cluster:
     # 2. Incrementally merge frames until criterion are matched
 
     temp_miller_indicies = sorted_cluster[0].miller_array
-    for idx, image in enumerate((x.miller_array for x in sorted_cluster[1:])):
+    for idx, image in enumerate(x.miller_array for x in sorted_cluster[1:]):
       temp_miller_indicies = temp_miller_indicies. \
         concatenate(image, assert_is_similar_symmetry=False)
       current_completeness = temp_miller_indicies.merge_equivalents() \
@@ -829,7 +829,7 @@ class Cluster:
     axes_to_return[0].hist(errors, 50, range=[0, 200])
     axes_to_return[0].set_title("Standard Errors on Wilson fit")
     axes_to_return[0].set_ylabel("Count")
-    axes_to_return[0].set_xlabel("Standard Error [$\AA^2$]")
+    axes_to_return[0].set_xlabel(r"Standard Error [$\AA^2$]")
 
     rs = [-1 * i.minus_2B / 2 for i in self.members]
     axes_to_return[1].hist(rs, 50, range=[-50, 200])
@@ -840,7 +840,7 @@ class Cluster:
     axes_to_return[2].plot([i.G for i in self.members],
              [-1 * i.minus_2B / 2 for i in self.members], 'x')
     axes_to_return[2].set_xlabel("G [AU]")
-    axes_to_return[2].set_ylabel("B [$\AA^2$]")
+    axes_to_return[2].set_ylabel(r"B [$\AA^2$]")
     axes_to_return[2].set_title("G and B for all members")
 
     plt.tight_layout()

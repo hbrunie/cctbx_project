@@ -14,11 +14,13 @@ except ImportError:
 except AttributeError:
   pass
 
+import errno
 from xfel.cftbx.detector import cspad_cbf_tbx
 from xfel.cxi.cspad_ana import cspad_tbx, rayonix_tbx
 import pycbf, os, sys, copy, socket
 import libtbx.load_env
 from libtbx.utils import Sorry, Usage
+from dials.util import show_mail_on_error
 from dials.util.options import OptionParser
 from libtbx.phil import parse
 from dxtbx.model.experiment_list import ExperimentListFactory
@@ -290,22 +292,22 @@ xtc_phil_str = '''
     logging_dir = None
       .type = str
       .help = Directory output log files will be placed
-    experiments_filename = %s_experiments.json
+    experiments_filename = %s.expt
       .type = str
       .help = The filename for output experiment list
-    strong_filename = %s_strong.pickle
+    strong_filename = %s_strong.refl
       .type = str
       .help = The filename for strong reflections from spot finder output.
-    indexed_filename = %s_indexed.pickle
+    indexed_filename = %s_indexed.refl
       .type = str
       .help = The filename for indexed reflections.
-    refined_experiments_filename = %s_refined_experiments.json
+    refined_experiments_filename = %s_refined.expt
       .type = str
       .help = The filename for saving refined experimental models
-    integrated_filename = %s_integrated.pickle
+    integrated_filename = %s_integrated.refl
       .type = str
       .help = The filename for final experimental modls
-    integrated_experiments_filename = %s_integrated_experiments.json
+    integrated_experiments_filename = %s_integrated.expt
       .type = str
       .help = The filename for final integrated reflections.
     profile_filename = None
@@ -314,7 +316,7 @@ xtc_phil_str = '''
     integration_pickle = int-%d-%s.pickle
       .type = str
       .help = Filename for cctbx.xfel-style integration pickle files
-    reindexedstrong_filename = %s_reindexedstrong.pickle
+    reindexedstrong_filename = %s_reindexedstrong.refl
       .type = str
       .help = The file name for re-indexed strong reflections
     tmp_output_dir = "(NONE)"
@@ -350,9 +352,6 @@ xtc_phil_str = '''
 from dials.command_line.stills_process import dials_phil_str, program_defaults_phil_str
 
 extra_dials_phil_str = '''
-  verbosity = 1
-   .type = int(value_min=0)
-   .help = The verbosity level
   border_mask {
     include scope dials.util.masking.phil_scope
   }
@@ -429,6 +428,8 @@ phil_scope = parse(xtc_phil_str + dials_phil_str + extra_dials_phil_str + db_phi
 
 from xfel.command_line.xfel_process import Script as DialsProcessScript
 from xfel.ui.db.frame_logging import DialsProcessorWithLogging
+from xfel.ui.db.dxtbx_db import dxtbx_xfel_db_application
+
 class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
   """ Script to process XFEL data at LCLS """
   def __init__(self):
@@ -461,6 +462,7 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
 
     self.tt_low = None
     self.tt_high = None
+    self.db_app = None
 
   def debug_start(self, ts):
     self.debug_str = "%s,%s"%(socket.gethostname(), ts)
@@ -542,12 +544,13 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
         else:
           tmp_dir = os.path.join(params.output.tmp_output_dir, '.tmp')
         if not os.path.exists(tmp_dir):
-          try:
-            os.makedirs(tmp_dir)
-          except Exception as e:
-            # Can fail if running multiprocessed, which is ok if the tmp folder was created
-            if not os.path.exists(tmp_dir):
-              halraiser(e)
+          with show_mail_on_error():
+            try:
+              os.makedirs(tmp_dir)
+              # Can fail if running multiprocessed - that's OK if the folder was created
+            except OSError as e:  # In Python 2, a FileExistsError is just an OSError
+              if e.errno != errno.EEXIST:  # If this OSError is not a FileExistsError
+                raise
       os.environ['CBF_TMP_DIR'] = tmp_dir
 
     for abs_params in params.integration.absorption_correction:
@@ -630,7 +633,7 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
       debug_path = os.path.join(params.output.logging_dir, "debug_rank%04d.out"%rank)
 
     from dials.util import log
-    log.config(params.verbosity, info=info_path, debug=debug_path)
+    log.config(options.verbose, info=info_path, debug=debug_path)
 
     debug_dir = os.path.join(params.output.output_dir, "debug")
     if not os.path.exists(debug_dir):
@@ -714,6 +717,10 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
       max_events = sys.maxsize
     else:
       max_events = params.dispatch.max_events
+
+    # Set up db connection if being used
+    if self.params.experiment_tag is not None:
+      self.db_app = dxtbx_xfel_db_application(params)
 
     for run in ds.runs():
       if params.format.file_format == "cbf":
@@ -878,14 +885,14 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
         experiment_jsons = []
         indexed_tables = []
         for filename in os.listdir(params.output.output_dir):
-          if not filename.endswith("_indexed.pickle"):
+          if not filename.endswith("_indexed.refl"):
             continue
-          experiment_jsons.append(os.path.join(params.output.output_dir, filename.split("_indexed.pickle")[0] + "_refined_experiments.json"))
+          experiment_jsons.append(os.path.join(params.output.output_dir, filename.split("_indexed.refl")[0] + "_refined.expt"))
           indexed_tables.append(os.path.join(params.output.output_dir, filename))
           if params.format.file_format == "cbf":
-            images.append(os.path.join(params.output.output_dir, filename.split("_indexed.pickle")[0] + ".cbf"))
+            images.append(os.path.join(params.output.output_dir, filename.split("_indexed.refl")[0] + ".cbf"))
           elif params.format.file_format == "pickle":
-            images.append(os.path.join(params.output.output_dir, filename.split("_indexed.pickle")[0] + ".pickle"))
+            images.append(os.path.join(params.output.output_dir, filename.split("_indexed.refl")[0] + ".pickle"))
 
         if len(images) < params.joint_reintegration.minimum_results:
           pass # print and return
@@ -900,8 +907,8 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
           f.write("}\n")
         f.close()
 
-        combined_experiments_file = os.path.join(reint_dir, "combined_experiments.json")
-        combined_reflections_file = os.path.join(reint_dir, "combined_reflections.pickle")
+        combined_experiments_file = os.path.join(reint_dir, "combined.expt")
+        combined_reflections_file = os.path.join(reint_dir, "combined.refl")
         command = "dials.combine_experiments reference_from_experiment.average_detector=True %s output.reflections=%s output.experiments=%s"% \
           (combo_input, combined_reflections_file, combined_experiments_file)
         print(command)
@@ -922,23 +929,20 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
         experiments = refiner.get_experiments()
         reflections = combined_reflections.select(refiner.selection_used_for_refinement())
 
-        from dxtbx.model.experiment_list import ExperimentListDumper
         from dxtbx.model import ExperimentList
-        dump = ExperimentListDumper(experiments)
-        dump.as_json(os.path.join(reint_dir, "refined_experiments.json"))
-        reflections.as_pickle(os.path.join(reint_dir, "refined_reflections.pickle"))
+        experiments.as_file(os.path.join(reint_dir, "refined.expt"))
+        reflections.as_pickle(os.path.join(reint_dir, "refined.refl"))
 
         for expt_id, (expt, img_file) in enumerate(zip(experiments, images)):
           try:
             refls = reflections.select(reflections['id'] == expt_id)
             refls['id'] = flex.int(len(refls), 0)
             base_name = os.path.splitext(os.path.basename(img_file))[0]
-            self.params.output.integrated_filename = os.path.join(reint_dir, base_name + "_integrated.pickle")
+            self.params.output.integrated_filename = os.path.join(reint_dir, base_name + "_integrated.refl")
 
             expts = ExperimentList([expt])
             self.integrate(expts, refls)
-            dump = ExperimentListDumper(expts)
-            dump.as_json(os.path.join(reint_dir, base_name + "_refined_experiments.json"))
+            expts.as_file(os.path.join(reint_dir, base_name + "_refined.expt"))
           except Exception as e:
             print("Couldn't reintegrate", img_file, str(e))
     print("Rank %d signing off"%rank)
@@ -1081,8 +1085,8 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
 
     self.cache_ranges(dxtbx_img, self.params.input.override_spotfinding_trusted_min, self.params.input.override_spotfinding_trusted_max)
 
-    from dxtbx.imageset import ImageSet, ImageSetData, MemReader, MemMasker
-    imgset = ImageSet(ImageSetData(MemReader([dxtbx_img]), MemMasker([dxtbx_img])))
+    from dxtbx.imageset import ImageSet, ImageSetData, MemReader
+    imgset = ImageSet(ImageSetData(MemReader([dxtbx_img]), None))
     imgset.set_beam(dxtbx_img.get_beam())
     imgset.set_detector(dxtbx_img.get_detector())
 
@@ -1248,7 +1252,7 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
 
     if self.cached_ranges is not None:
       # Load a dials mask from the trusted range and psana mask
-      imgset = ImageSet(ImageSetData(MemReader([dxtbx_img]), MemMasker([dxtbx_img])))
+      imgset = ImageSet(ImageSetData(MemReader([dxtbx_img]), None))
       imgset.set_beam(dxtbx_img.get_beam())
       imgset.set_detector(dxtbx_img.get_detector())
       from dials.util.masking import MaskGenerator
@@ -1349,9 +1353,6 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
     super(InMemScript, self).finalize()
 
 if __name__ == "__main__":
-  from dials.util import halraiser
-  try:
+  with show_mail_on_error():
     script = InMemScript()
     script.run()
-  except Exception as e:
-    halraiser(e)

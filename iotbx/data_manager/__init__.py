@@ -149,14 +149,6 @@ class DataManagerBase(object):
 
     # dynamically construct master PHIL string
     self.master_phil_str = 'data_manager {\n'
-    self.master_phil_str += """
-default_output_filename = None
-  .type = str
-  .help = The default filename for output files (without file extension).
-overwrite = False
-  .type = bool
-  .help = The default setting for overwriting files with the same name.
-"""
     for datatype in self.datatypes:
 
       # check if a datatype has a custom PHIL str
@@ -206,6 +198,10 @@ overwrite = False
     # set defaults
     self._default_output_filename = 'cctbx_program'
     self._overwrite = False
+    self._used_output_ext = set()
+
+    # set program
+    self._program = None
 
     # logger (currently used for models)
     self.logger = logger
@@ -226,8 +222,6 @@ overwrite = False
     This assumes that the key names in the data structures are valid filenames.
     '''
     phil_extract = self.master_phil.extract()
-    phil_extract.data_manager.default_output_filename = self._default_output_filename
-    phil_extract.data_manager.overwrite = self._overwrite
     for datatype in self.datatypes:
       if (hasattr(self, self.export_custom_phil_extract % datatype)):
         setattr(phil_extract.data_manager, '%s' % datatype,
@@ -300,6 +294,14 @@ overwrite = False
 
   def get_overwrite(self, overwrite):
     return self._overwrite
+
+  # ---------------------------------------------------------------------------
+  def set_program(self, program):
+    '''
+    Function for linking the program to the DataManager. This allows the
+    DataManager to update values in the program if necessary.
+    '''
+    self._program = program
 
   # ---------------------------------------------------------------------------
   # Generic functions for manipulating data
@@ -406,6 +408,38 @@ overwrite = False
       else:
         self._add(datatype, filename, a.file_object)
 
+  def _update_default_output_filename(self, filename):
+    '''
+    Increments program.params.serial by 1 and sets new default output
+    filename
+
+    Parameters
+    ----------
+    filename: str
+      The filename to be updated. This will only be done when the
+      filename follows the default output format.
+
+    Returns
+    -------
+    filename: str
+      The updated filename if it has been updated, otherwise the original
+      filename
+    '''
+    basename, ext = os.path.splitext(filename)
+    if basename == self._default_output_filename:
+      if ext in self._used_output_ext:
+        if (self._program is not None and
+            self._program.params.output.serial is not None):
+          self._program.params.output.serial += 1
+          self.set_default_output_filename(
+            self._program.get_default_output_filename())
+          basename = self.get_default_output_filename()
+          self._used_output_ext = set()
+      else:
+        self._used_output_ext.add(ext)
+      filename = basename + ext
+    return filename
+
   def _write_text(self, datatype, text_str, filename=Auto, overwrite=Auto):
     '''
     Convenience function for writing text to file
@@ -416,6 +450,9 @@ overwrite = False
       filename = self._default_output_filename
     if (overwrite is Auto):
       overwrite = self._overwrite
+
+    # update default output filename, if necessary
+    filename = self._update_default_output_filename(filename)
 
     # check arguments
     if (os.path.isfile(filename) and (not overwrite)):

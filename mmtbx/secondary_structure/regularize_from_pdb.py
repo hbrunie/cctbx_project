@@ -175,6 +175,11 @@ master_phil = iotbx.phil.parse("""
        .help = Cut up segments (make short segments of secondary structure)
        .short_caption = Cut up segments
 
+     extend_segments = False
+       .type = bool
+       .help = Try to extend segments in both directions one residue at a time
+       .short_caption = Extend segments
+
      write_helix_sheet_records = False
        .type = bool
        .help = Write HELIX and SHEET records
@@ -1735,7 +1740,7 @@ class replace_with_segments_from_pdb:
           [cg.get_left_connection()+cg.get_score()*small_number,cg])
       else:
         sort_list.append([cg.get_score(),cg])
-    sort_list.sort()
+    sort_list.sort(key = lambda x: x[0])
     if not sort_by_start: # high to low in score, low to high in sort_by_start
       sort_list.reverse()
     connected_groups=[]
