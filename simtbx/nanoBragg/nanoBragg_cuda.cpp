@@ -8,11 +8,7 @@ extern "C" int get_num_devices_cu();
 
 // function declaration from nanoBraggCUDA.cu
 extern "C"
-<<<<<<< HEAD
 void nanoBraggSpotsCUDA(int deviceId, int timelog, int spixels, int fpixels, int roi_xmin, int roi_xmax,
-=======
-void nanoBraggSpotsCUDA(int deviceId, int spixels, int fpixels, int roi_xmin, int roi_xmax,
->>>>>>> master
                         int roi_ymin, int roi_ymax, int oversample,
                         int point_pixel, double pixel_size, double subpixel_size,
                         int steps, double detector_thickstep,

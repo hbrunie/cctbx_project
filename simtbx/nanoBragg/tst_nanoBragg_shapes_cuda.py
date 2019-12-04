@@ -57,9 +57,9 @@ def main(shape=shapetype.Tophat, cuda=False, seed=None):
         SIM.get_raw_pixels_cuda()
         SIM.deallocate_cuda()
         
-        #SIM.add_nanoBragg_spots_cuda()
     else:
-        SIM.add_nanoBragg_spots()
+        #SIM.add_nanoBragg_spots()
+        SIM.add_nanoBragg_spots_cuda()
     img = SIM.raw_pixels.as_numpy_array()
     return img
 
@@ -80,7 +80,8 @@ if __name__ == "__main__":
 
 
         # check whether all values are within 0.1 photons:
-        if not np.allclose(img, img_cuda, rtol=0, atol=0.1):
+        #np.savetxt("dumpPixels.txt",img,"%6.2f")
+        if not np.allclose(img, img_cuda, rtol=0, atol=0.001):
             failed_shapes.append( repr(shape))
     if failed_shapes:
         print ("\nThe following shape models failed the test:")
