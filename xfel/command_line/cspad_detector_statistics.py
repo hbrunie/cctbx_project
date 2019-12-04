@@ -14,6 +14,7 @@
 #
 from __future__ import absolute_import, division, print_function
 from six.moves import range
+from dials.util import show_mail_on_error
 from libtbx.phil import parse
 import libtbx.load_env
 from libtbx.utils import Usage
@@ -60,8 +61,8 @@ class Script(object):
     if params.tag is None:
       raise Usage(self.parser.usage)
 
-    level_json = "%s_%d_refined_experiments_level%d.json"
-    level_pickle = "%s_%d_refined_reflections_level%d.pickle"
+    level_json = "%s_%d_refined_level%d.expt"
+    level_pickle = "%s_%d_refined_level%d.refl"
 
     command = "cspad.detector_congruence %s %s %s %s hierarchy_level=%d show_plots=False"
 
@@ -87,9 +88,6 @@ class Script(object):
 
 
 if __name__ == '__main__':
-  from dials.util import halraiser
-  try:
+  with show_mail_on_error():
     script = Script()
     script.run()
-  except Exception as e:
-    halraiser(e)

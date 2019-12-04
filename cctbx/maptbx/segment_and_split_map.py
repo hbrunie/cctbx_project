@@ -679,12 +679,14 @@ master_phil = iotbx.phil.parse("""
 
      max_cc_for_rescale = 0.2
        .type = float
-       .short_caption = Max CC for rescaleMin reliable CC in half-maps
-       .help = Used along with cc_cut and scale_using_last to correct for \
+       .short_caption = Max CC for rescale
+       .help =  Min reliable CC in half-maps. \
+               Used along with cc_cut and scale_using_last to correct for \
                small errors in FSC estimation at high resolution.  If the \
                value of FSC near the high-resolution limit is above \
                max_cc_for_rescale, assume these values are correct and do not \
-               correct them.
+               correct them. To keep all original values use\
+               max_cc_for_rescale=1
 
      scale_using_last = 3
        .type = int
@@ -1204,7 +1206,7 @@ master_params = master_phil
 
 class map_and_b_object:
   def __init__(self,
-      map_data=None,
+       map_data=None,
       starting_b_iso=None,
       final_b_iso=None):
     from libtbx import adopt_init_args
@@ -1322,7 +1324,7 @@ class map_info_object:
     lower_bounds=self.origin
     upper_bounds=[]
     for a,b in zip(self.origin,self.all):
-      upper_bounds.append(a+b)
+      upper_bounds.append(a+b-1) # 2019-11-05 upper bound is na-1
     return list(self.origin),list(upper_bounds)
 
 class info_object:
@@ -1387,14 +1389,27 @@ class info_object:
     self.init_asctime=time.asctime()
 
   def set_box_map_ncs_au_map_data(self,box_map_ncs_au_map_data=None,
+       box_map_ncs_au_half_map_data_list=None,
        box_map_ncs_au_crystal_symmetry=None):
     self.box_map_ncs_au_map_data=box_map_ncs_au_map_data.deep_copy()
+    self.box_map_ncs_au_half_map_data_list=[]
+    for hm in box_map_ncs_au_half_map_data_list:
+       self.box_map_ncs_au_half_map_data_list.append(hm.deep_copy())
     self.box_map_ncs_au_crystal_symmetry=box_map_ncs_au_crystal_symmetry
     if self.origin_shift and self.origin_shift != (0,0,0):
-        self.box_map_ncs_au_map_data=self.shift_map_back(
-      map_data=self.box_map_ncs_au_map_data,
-      crystal_symmetry=self.box_map_ncs_au_crystal_symmetry,
-      shift_cart=self.origin_shift)
+      self.box_map_ncs_au_map_data=self.shift_map_back(
+        map_data=self.box_map_ncs_au_map_data,
+        crystal_symmetry=self.box_map_ncs_au_crystal_symmetry,
+        shift_cart=self.origin_shift)
+
+      new_hm_list=[]
+      for hm in self.box_map_ncs_au_half_map_data_list:
+        hm=self.shift_map_back(
+          map_data=hm,
+          crystal_symmetry=self.box_map_ncs_au_crystal_symmetry,
+          shift_cart=self.origin_shift)
+        new_hm_list.append(hm)
+      self.box_map_ncs_au_half_map_data_list=new_hm_list
 
   def shift_map_back(self,map_data=None,
       crystal_symmetry=None,shift_cart=None):
@@ -2211,11 +2226,12 @@ class sharpening_info:
 
     elif self.sharpening_method=="model_sharpening":
       print("Resolution-dependent model sharpening", file=out)
-      print("Scale vs resolution:", file=out)
-      for d_min,sc in zip(
-        self.d_min_list,
-        self.target_scale_factors):
-        print("Dmin: %7.2f  Scale: %9.6f" %(d_min,sc), file=out)
+      if self.d_min_list and self.target_scale_factors:
+        print("Scale vs resolution:", file=out)
+        for d_min,sc in zip(
+          self.d_min_list,
+          self.target_scale_factors):
+          print("Dmin: %7.2f  Scale: %9.6f" %(d_min,sc), file=out)
 
     elif self.sharpening_method=="half_map_sharpening":
       print("Resolution-dependent half-map sharpening", file=out)
@@ -2651,9 +2667,11 @@ def get_f_phases_from_map(map_data=None,crystal_symmetry=None,d_min=None,
       d_min_use=None
     from mmtbx.command_line.map_to_structure_factors import run as map_to_sf
     if crystal_symmetry.space_group().type().number() in [0,1]:
-      args=['d_min=None','box=True','keep_origin=False']
+      args=['d_min=None','box=True','keep_origin=False',
+         'scale_max=%s' %scale_max]
     else: # cannot use box for other space groups
-      args=['d_min=%s'%(d_min_use),'box=False','keep_origin=False']
+      args=['d_min=%s'%(d_min_use),'box=False','keep_origin=False',
+         'scale_max=%s' %scale_max]
     map_coeffs=map_to_sf(args=args,
          space_group_number=crystal_symmetry.space_group().type().number(),
          ccp4_map=make_ccp4_map(map_data,crystal_symmetry.unit_cell()),
@@ -2688,6 +2706,7 @@ def apply_sharpening(map_coeffs=None,
     target_scale_factors=None,
     f_array=None,phases=None,d_min=None,k_sharpen=None,
     b_blur_hires=None,
+    include_sharpened_map_coeffs=False,
     out=sys.stdout):
     if map_coeffs and f_array is None and phases is None:
       f_array,phases=map_coeffs_as_fp_phi(map_coeffs)
@@ -2784,10 +2803,12 @@ def apply_sharpening(map_coeffs=None,
       crystal_symmetry=crystal_symmetry,
        n_real=n_real)
     mb=map_and_b_object(map_data=map_data,final_b_iso=actual_b_iso)
+    if include_sharpened_map_coeffs:
+      mb.sharpened_map_coeffs=sharpened_map_coeffs
     return mb
 
 def get_map_from_map_coeffs(map_coeffs=None,crystal_symmetry=None,
-     n_real=None):
+     n_real=None,apply_sigma_scaling=True):
     from cctbx import maptbx
     from cctbx.maptbx import crystal_gridding
     if map_coeffs.crystal_symmetry().space_group_info()!= \
@@ -2806,7 +2827,10 @@ def get_map_from_map_coeffs(map_coeffs=None,crystal_symmetry=None,
     fft_map = map_coeffs.fft_map( resolution_factor = 0.25,
        crystal_gridding=cg,
        symmetry_flags=maptbx.use_space_group_symmetry)
-    fft_map.apply_sigma_scaling()
+    if apply_sigma_scaling:
+      fft_map.apply_sigma_scaling()
+    else:
+      fft_map.apply_volume_scaling()
     map_data=fft_map.real_map_unpadded()
     return map_data
 
@@ -2823,13 +2847,13 @@ def find_symmetry_center(map_data,crystal_symmetry=None,out=sys.stdout):
     for i in range(0,all[ai]):
       if ai==0:
         start_tuple=tuple((i,0,0))
-        end_tuple=tuple((i,all[1],all[2]))
+        end_tuple=tuple((i,all[1]-1,all[2]-1))  #2019-11-05 not beyond na-1
       elif ai==1:
          start_tuple=tuple((0,i,0))
-         end_tuple=tuple((all[0],i,all[2]))
+         end_tuple=tuple((all[0]-1,i,all[2]-1))
       elif ai==2:
          start_tuple=tuple((0,0,i))
-         end_tuple=tuple((all[0],all[1],i))
+         end_tuple=tuple((all[0]-1,all[1]-1,i))
       new_map_data = maptbx.copy(map_data,
          start_tuple,end_tuple)
       mean_value=max(0.,new_map_data.as_1d().as_double().min_max_mean().mean)
@@ -4044,6 +4068,11 @@ def get_params_from_args(args):
 def get_mask_around_molecule(map_data=None,
         wang_radius=None,
         buffer_radius=None,
+        force_buffer_radius=None,
+        return_masked_fraction=False,
+        minimum_fraction_of_max=0.01,
+        solvent_content=None,
+        solvent_content_iterations=None,
         crystal_symmetry=None, out=sys.stdout):
   # use iterated solvent fraction tool to identify mask around molecule
   try:
@@ -4051,9 +4080,15 @@ def get_mask_around_molecule(map_data=None,
     solvent_fraction,mask=iterated_solvent_fraction(
       crystal_symmetry=crystal_symmetry,
       wang_radius=wang_radius,
+      solvent_content=solvent_content,
+      solvent_content_iterations=solvent_content_iterations,
       map_as_double=map_data,
       out=out)
   except Exception as e:
+    print("No mask obtained...", file=out)
+    return None,None
+
+  if not mask:
     print("No mask obtained...", file=out)
     return None,None
 
@@ -4069,13 +4104,43 @@ def get_mask_around_molecule(map_data=None,
 
   co,sorted_by_volume,min_b,max_b=get_co(map_data=mask,
      threshold=0.5,wrapping=False)
+  if len(sorted_by_volume)<2:
+    print ("\nSkipping expansion as no space is available\n",file=out)
+    return None,None
+
   masked_fraction=sorted_by_volume[1][0]/mask.size()
-  print("\nMasked fraction before buffering: %7.2f" %(masked_fraction), file=out)
+
+  bool_region_mask = co.expand_mask(id_to_expand=sorted_by_volume[1][1],
+       expand_size=expand_size)
+  s=(bool_region_mask==True)
+  expanded_fraction=s.count(True)/s.size()
+  print("\nLargest masked region before buffering: %7.2f" %(masked_fraction),
+      file=out)
+  print("\nLargest masked region after buffering: %7.2f" %(expanded_fraction),
+     file=out)
+  if solvent_content and (not force_buffer_radius):
+    delta_as_is=abs(solvent_content- (1-masked_fraction))
+    delta_expanded=abs(solvent_content- (1-expanded_fraction))
+    if delta_expanded > delta_as_is:
+      # already there
+      expand_size=0
+      print ("Setting expand size to zero as masked fraction already ",
+         "close to solvent_content",file=out)
 
   s=None
+  minimum_size=sorted_by_volume[1][0] * minimum_fraction_of_max
+  if expand_size==0:
+    result=co.result()
+  else:
+    result=None
+
   for v1,i1 in sorted_by_volume[1:]:
-    bool_region_mask = co.expand_mask(
-      id_to_expand=i1, expand_size=expand_size)
+    if v1 < minimum_size: break
+    if expand_size > 0:
+      bool_region_mask = co.expand_mask(
+        id_to_expand=i1, expand_size=expand_size)
+    else:
+      bool_region_mask=(result==i1)
     if s is None:
       s = (bool_region_mask==True)
     else:
@@ -4084,7 +4149,10 @@ def get_mask_around_molecule(map_data=None,
   mask.set_selected(~s,0)
   masked_fraction=mask.count(1)/mask.size()
   print("Masked fraction after buffering:  %7.2f" %(masked_fraction), file=out)
-  return mask.as_double(),solvent_fraction
+  if return_masked_fraction:
+    return mask.as_double(),1-masked_fraction
+  else: # usual return solvent fraction estimate
+    return mask.as_double(),solvent_fraction  # This is solvent fraction est.
 
 def get_mean_in_and_out(sel=None,
     map_data=None,
@@ -4136,21 +4204,11 @@ def apply_soft_mask(map_data=None,
   # apply a soft mask based on mask_data to map_data.
   # set value outside mask==mean value inside mask or mean value outside mask
 
+  original_mask_data=mask_data.deep_copy()
 
-  s = mask_data > threshold  # s marks inside mask
-
-  # get mean inside or outside mask
-  if verbose:
-    print("\nStarting map values inside and outside mask:", file=out)
-  mean_value_in,mean_value_out,fraction_in=get_mean_in_and_out(sel=s,
-    verbose=verbose,map_data=map_data, out=out)
-
-  if verbose:
-    print("\nMask inside and outside values", file=out)
-  mask_mean_value_in,mask_mean_value_out,mask_fraction_in=get_mean_in_and_out(
-      sel=s,map_data=mask_data, verbose=verbose,out=out)
 
   # Smooth the mask in place. First make it a binary mask
+  s = mask_data > threshold  # s marks inside mask
   mask_data = mask_data.set_selected(~s, 0)  # outside mask==0
   mask_data = mask_data.set_selected( s, 1)
   if mask_data.count(1)  and mask_data.count(0): # something to do
@@ -4173,10 +4231,42 @@ def apply_soft_mask(map_data=None,
     if verbose:
       print("Not smoothing mask that is a constant...", file=out)
 
+  masked_map,smoothed_mask_data=apply_mask_to_map(mask_data=original_mask_data,
+     smoothed_mask_data=mask_data,map_data=map_data,
+     set_outside_to_mean_inside=set_outside_to_mean_inside,
+     set_mean_to_zero=set_mean_to_zero,
+     threshold=threshold,
+     verbose=verbose,
+     out=out)
+  return masked_map,smoothed_mask_data
+
+def apply_mask_to_map(mask_data=None,
+    smoothed_mask_data=None,
+    set_outside_to_mean_inside=None,
+    set_mean_to_zero=None,
+    map_data=None,
+    threshold=None,
+    verbose=None,
+    out=sys.stdout):
+
+  s = mask_data > threshold  # s marks inside mask
+
+  # get mean inside or outside mask
+  if verbose:
+    print("\nStarting map values inside and outside mask:", file=out)
+  mean_value_in,mean_value_out,fraction_in=get_mean_in_and_out(sel=s,
+    verbose=verbose,map_data=map_data, out=out)
+
+  if verbose:
+    print("\nMask inside and outside values", file=out)
+  mask_mean_value_in,mask_mean_value_out,mask_fraction_in=get_mean_in_and_out(
+      sel=s,map_data=mask_data, verbose=verbose,out=out)
+
   if verbose:
     print("\nSmoothed mask inside and outside values", file=out)
   smoothed_mean_value_in,smoothed_mean_value_out,smoothed_fraction_in=\
-     get_mean_in_and_out(sel=s,map_data=mask_data, verbose=verbose,out=out)
+     get_mean_in_and_out(sel=s,map_data=smoothed_mask_data,
+       verbose=verbose,out=out)
 
   # Now replace value outside mask with mean_value, value inside with current,
   #   smoothly going from one to the other based on mask_data
@@ -4196,7 +4286,7 @@ def apply_soft_mask(map_data=None,
   ss = set_to_mean > -1.e+30 # select everything
   set_to_mean.set_selected(ss, target_value_for_outside)
 
-  masked_map= (map_data * mask_data ) +  (set_to_mean * (1-mask_data))
+  masked_map= (map_data * smoothed_mask_data ) +  (set_to_mean * (1-smoothed_mask_data))
 
   if set_mean_to_zero:  # remove average
     masked_map=masked_map - masked_map.as_1d().min_max_mean().mean
@@ -4206,7 +4296,7 @@ def apply_soft_mask(map_data=None,
   mean_value_in,mean_value_out,fraction_in=get_mean_in_and_out(sel=s,
     map_data=masked_map, verbose=verbose,out=out)
 
-  return masked_map,mask_data
+  return masked_map,smoothed_mask_data
 
 def estimate_expand_size(
        crystal_symmetry=None,
@@ -4548,6 +4638,7 @@ def check_memory(map_data,ratio_needed,maximum_fraction_to_use=0.90,
         "memory (%.0f GB needed) \nto run this job" %(needed_memory))
 
 def get_params(args,map_data=None,crystal_symmetry=None,
+    half_map_data_list=None,
     sharpening_target_pdb_inp=None,
     ncs_object=None,
     sequence=None,
@@ -4642,7 +4733,7 @@ def get_params(args,map_data=None,crystal_symmetry=None,
       "set residual_target=kurtosis and sharpening_target=kurtosis")
     print("OK", file=out)
 
-  half_map_data_list=[]
+  if not half_map_data_list: half_map_data_list=[]
 
   if params.input_files.info_file:
     map_data=None
@@ -5171,7 +5262,11 @@ def get_and_apply_soft_mask_to_maps(
     resolution=None,  #params.crystal_info.resolution
     wang_radius=None, #params.crystal_info.wang_radius
     buffer_radius=None, #params.crystal_info.buffer_radius
+    force_buffer_radius=None, # apply buffer radius always
     map_data=None,crystal_symmetry=None,
+    solvent_content=None,
+    solvent_content_iterations=None,
+    return_masked_fraction=True,
     rad_smooth=None,
     half_map_data_list=None,
     out=sys.stdout):
@@ -5182,8 +5277,9 @@ def get_and_apply_soft_mask_to_maps(
   if not rad_smooth:
     rad_smooth=resolution
 
-  print("\nApplying soft mask with smoothing radius of %s\n" %(
-    rad_smooth), file=out)
+  if rad_smooth:
+    print("\nApplying soft mask with smoothing radius of %.2f A\n" %(
+      rad_smooth), file=out)
   if wang_radius:
     wang_radius=wang_radius
   else:
@@ -5198,11 +5294,23 @@ def get_and_apply_soft_mask_to_maps(
   cell_dims=crystal_symmetry.unit_cell().parameters()[:3]
   min_cell_dim=min(cell_dims)
   if wang_radius > 0.25 * min_cell_dim or buffer_radius > 0.25 * min_cell_dim:
-    raise Sorry("Cell is too small to get solvent fraction")
+    new_wang_radius=min(wang_radius,0.25 * min_cell_dim)
+    new_buffer_radius=min(buffer_radius,0.25 * min_cell_dim)
+    print ("Cell is too small to get solvent fraction ...resetting "+
+       "values of wang_radius \n"+
+      "(was %.3f A now %.3f A) and buffer_radius (was %.3f A now %.3f A)" %(
+       wang_radius,new_wang_radius,buffer_radius,new_buffer_radius),file=out)
+    wang_radius=new_wang_radius
+    buffer_radius=new_buffer_radius
+
   mask_data,solvent_fraction=get_mask_around_molecule(map_data=map_data,
     crystal_symmetry=crystal_symmetry,
     wang_radius=wang_radius,
+    solvent_content=solvent_content,
+    solvent_content_iterations=solvent_content_iterations,
     buffer_radius=buffer_radius,
+    force_buffer_radius=force_buffer_radius,
+    return_masked_fraction=return_masked_fraction,
     out=out)
   if mask_data:
     map_data,smoothed_mask_data=apply_soft_mask(map_data=map_data,
@@ -5730,9 +5838,14 @@ def create_rna_dna(cns_dna_rna_residue_names):
 def get_solvent_content_from_seq_file(params,
     sequence=None,
     seq_file=None,
+    overall_chain_type=None,
     ncs_copies=None,
     map_volume=None,
     out=sys.stdout):
+
+  if params and not overall_chain_type:
+     overall_chain_type=params.crystal_info.chain_type
+
   if not sequence and not os.path.isfile(seq_file):
     raise Sorry(
      "The sequence file '%s' is missing." %(seq_file))
@@ -5766,7 +5879,7 @@ def get_solvent_content_from_seq_file(params,
   chain_types_considered=[]
   for seq in all_unique_sequence:
     volume,nres,chain_type=get_volume_of_seq(seq,
-      chain_type=params.crystal_info.chain_type,out=out)
+      chain_type=overall_chain_type,out=out)
     if volume is None: continue
     volume_of_chains+=volume
     n_residues+=nres
@@ -5791,6 +5904,11 @@ def get_solvent_content_from_seq_file(params,
 
 def get_solvent_fraction(params,
      ncs_object=None,ncs_copies=None,
+     do_not_adjust_dalton_scale=None,
+     sequence=None,
+     seq_file=None,
+     molecular_mass=None,
+     solvent_content=None,
      crystal_symmetry=None,tracking_data=None,out=sys.stdout):
   if tracking_data and not crystal_symmetry:
     #crystal_symmetry=tracking_data.original_crystal_symmetry not used
@@ -5802,34 +5920,45 @@ def get_solvent_fraction(params,
   if not ncs_copies: ncs_copies=1
 
 
+  if params and not solvent_content:
+    solvent_content=params.crystal_info.solvent_content
+  if params and not molecular_mass:
+    molecular_mass=params.crystal_info.molecular_mass
+  if params and not seq_file:
+    seq_file=params.input_files.seq_file
+  if params and not sequence:
+    sequence=params.crystal_info.sequence
 
-  if params.input_files.seq_file or params.crystal_info.sequence:
+  if seq_file or sequence:
     solvent_content,n_residues,n_residues_times_ncs=\
          get_solvent_content_from_seq_file(
      params,
-     sequence=params.crystal_info.sequence,
-     seq_file=params.input_files.seq_file,
+     sequence=sequence,
+     seq_file=seq_file,
      ncs_copies=ncs_copies,
      map_volume=map_volume,
      out=out)
-    if not params.crystal_info.solvent_content:
+    if params and not params.crystal_info.solvent_content:
       params.crystal_info.solvent_content=solvent_content
       print("Solvent fraction from composition: %7.2f "%(
        params.crystal_info.solvent_content), file=out)
-    else:
+    elif params:
       print("Solvent content from parameters: %7.2f" %(
         params.crystal_info.solvent_content), file=out)
 
   else:
-    if params.crystal_info.solvent_content:
+    if params and params.crystal_info.solvent_content:
       print("Solvent content from parameters: %7.2f" %(
         params.crystal_info.solvent_content), file=out)
-    elif params.crystal_info.molecular_mass:
-       params.crystal_info.solvent_content=\
+    elif molecular_mass:
+       solvent_content=\
          get_solvent_fraction_from_molecular_mass(
         crystal_symmetry=crystal_symmetry,
-        molecular_mass=params.crystal_info.molecular_mass,
+        do_not_adjust_dalton_scale=do_not_adjust_dalton_scale,
+        molecular_mass=molecular_mass,
         out=out)
+       if params:
+         params.crystal_info.solvent_content=solvent_content
 
     else:
       print("Getting solvent content automatically.", file=out)
@@ -5846,7 +5975,7 @@ def get_solvent_fraction(params,
 
     return tracking_data
   else:
-    return params.crystal_info.solvent_content
+    return solvent_content
 
 def top_key(dd):
   if not dd:
@@ -7353,11 +7482,15 @@ def get_bounds_from_sites(sites_cart=None,map_data=None,
 def write_output_files(params,
     tracking_data=None,
     map_data=None,
+    half_map_data_list=None,
     ncs_group_obj=None,
     remainder_ncs_group_obj=None,
     pdb_hierarchy=None,
     removed_ncs=None,
     out=sys.stdout):
+
+  half_map_data_list_au=[]
+  if not half_map_data_list: half_map_data_list=[]
 
   if params.output_files.au_output_file_stem:
     au_mask_output_file=os.path.join(tracking_data.params.output_files.output_directory,params.output_files.au_output_file_stem+"_mask.ccp4")
@@ -7513,6 +7646,17 @@ def write_output_files(params,
       rad_smooth=tracking_data.params.crystal_info.resolution,
       crystal_symmetry=tracking_data.crystal_symmetry,
       out=out)
+    half_map_data_list_au=[]
+    for hm in half_map_data_list:  # apply mask to half maps
+      hm_data_ncs_au,hm_smoothed_mask_data=apply_soft_mask(
+        map_data=hm.deep_copy().as_double(),
+        mask_data=mask.as_double(),
+        rad_smooth=tracking_data.params.crystal_info.resolution,
+        crystal_symmetry=tracking_data.crystal_symmetry,
+        out=out)
+      half_map_data_list_au.append(hm_data_ncs_au)
+
+
   elif (box_ncs_au): # usual.  If box_ncs_au is False, do not mask
 
     map_data_ncs_au=map_data_ncs_au*mask
@@ -7522,6 +7666,13 @@ def write_output_files(params,
     n_tot=mask.size()
     mean_in_box=one_d.min_max_mean().mean*n_tot/(n_tot-n_zero)
     map_data_ncs_au=map_data_ncs_au+(1-mask)*mean_in_box
+    half_map_data_list_au=[]
+    for hm in half_map_data_list:  # apply mask to half maps
+      one_d=hm.as_1d()
+      mean_in_box=one_d.min_max_mean().mean*n_tot/(n_tot-n_zero)
+      hm_data_ncs_au=hm+(1-mask)*mean_in_box
+      half_map_data_list_au.append(hm_data_ncs_au)
+
     del one_d,mask
 
   if au_map_output_file and params.output_files.write_output_maps:
@@ -7566,10 +7717,24 @@ def write_output_files(params,
        map_data=map_data_ncs_au.as_double(),
        crystal_symmetry=tracking_data.crystal_symmetry,
        min_point=lower_bounds, max_point=upper_bounds,out=out)
+
+  half_map_data_list_au_box=[]
+  for hmdlu in half_map_data_list_au:
+    hm_box_map_ncs_au,dummy_box_crystal_symmetry,\
+       dummy_smoothed_box_mask_data,dummy_original_box_map_data=cut_out_map(
+       soft_mask=tracking_data.params.map_modification.soft_mask,
+       resolution=tracking_data.params.crystal_info.resolution,
+       map_data=hmdlu.as_double(),
+       crystal_symmetry=tracking_data.crystal_symmetry,
+       min_point=lower_bounds, max_point=upper_bounds,out=out)
+    half_map_data_list_au_box.append(hm_box_map_ncs_au)
+
   if params.control.save_box_map_ncs_au:
        tracking_data.set_box_map_ncs_au_map_data(
        box_map_ncs_au_crystal_symmetry=box_crystal_symmetry,
-       box_map_ncs_au_map_data=box_map_ncs_au,)
+       box_map_ncs_au_map_data=box_map_ncs_au,
+       box_map_ncs_au_half_map_data_list=half_map_data_list_au_box,
+       )
 
   write_ccp4_map(tracking_data.crystal_symmetry,'map_data_ncs_au.ccp4',map_data_ncs_au)
   write_ccp4_map(box_crystal_symmetry,'box_map_ncs_au.ccp4',box_map_ncs_au)
@@ -7819,7 +7984,7 @@ def cut_out_map(map_data=None, crystal_symmetry=None,
   na = map_data.all() # tuple with dimensions
   for i in range(3):
     assert min_point[i] >= 0
-    assert max_point[i] <= na[i]
+    assert max_point[i] < na[i]  # 2019-11-05 just na-1
   new_map_data = maptbx.copy(map_data, tuple(min_point), tuple(max_point))
   # NOTE: end point of map is max_point, so size of map (new all()) is
   #   (max_point-min_point+ (1,1,1))
@@ -7858,6 +8023,7 @@ def cut_out_map(map_data=None, crystal_symmetry=None,
 
 def set_up_and_apply_soft_mask(map_data=None,shift_origin=None,
   crystal_symmetry=None,resolution=None,
+  grid_units_for_boundary=None,
   radius=None,out=sys.stdout):
 
     acc=map_data.accessor()
@@ -7866,9 +8032,13 @@ def set_up_and_apply_soft_mask(map_data=None,shift_origin=None,
 
     # Add soft boundary to mean around outside of mask
     # grid_units is how many grid units are about equal to soft_mask_radius
-    grid_units=get_grid_units(map_data=map_data,
-      crystal_symmetry=crystal_symmetry,radius=radius,out=out)
-    grid_units=int(0.5+0.5*grid_units)
+    if grid_units_for_boundary is None:
+      grid_units=get_grid_units(map_data=map_data,
+        crystal_symmetry=crystal_symmetry,radius=radius,out=out)
+      grid_units=int(0.5+0.5*grid_units)
+    else:
+      grid_units=grid_units_for_boundary
+
     from cctbx import maptbx
     zero_boundary_map=maptbx.zero_boundary_box_map(
        map_data,grid_units).result()
@@ -8011,6 +8181,7 @@ def restore_pdb(params,tracking_data=None,out=sys.stdout):
 
 def find_threshold_in_map(target_points=None,
       map_data=None,
+      require_at_least_target_points=None,
       iter_max=10):
 
   map_1d=map_data.as_1d()
@@ -8022,18 +8193,29 @@ def find_threshold_in_map(target_points=None,
   low=map_min
   high=map_max
 
+  best_cutoff=None
+  best_score=None
   for iter in range(iter_max):
     s = (map_1d >cutoff)
     n_cutoff=s.count(True)
+    if (not require_at_least_target_points) or (n_cutoff >= target_points):
+      score=abs(n_cutoff-target_points)
+    else:
+      score=1.e+10 # allow it but anything above cutoff will be better
+
+    if best_score is None or score < best_score:
+      best_cutoff=cutoff
+      best_score=score
+
     if n_cutoff == target_points:
-      return cutoff
+      return best_cutoff
     elif n_cutoff < target_points: # lower it
       high=cutoff
       cutoff=0.5*(cutoff+low)
     else:  # raise it
       low=cutoff
       cutoff=0.5*(cutoff+high)
-  return cutoff
+  return best_cutoff
 
 
 def remove_points(mask,remove_points=None):
@@ -8221,6 +8403,7 @@ def get_overall_mask(
     map_data=None,
     mask_threshold=None,
     fraction_of_max_mask_threshold=None,
+    use_solvent_content_for_threshold=None, # use instead of fraction_of
     mask_padding_fraction=None,
     solvent_fraction=None,
     crystal_symmetry=None,
@@ -8228,6 +8411,7 @@ def get_overall_mask(
     resolution=None,
     d_max=100000.,
     out=sys.stdout):
+
 
   # Make a local SD map from our map-data
   from cctbx.maptbx import crystal_gridding
@@ -8290,8 +8474,8 @@ def get_overall_mask(
     max_in_sd_map,
     mean_in_map,
     min_in_map), file=out)
-
-  if fraction_of_max_mask_threshold:
+  if fraction_of_max_mask_threshold and (
+        (not solvent_fraction) or (not use_solvent_content_for_threshold)):
     mask_threshold=fraction_of_max_mask_threshold*max_in_sd_map
     print("Using fraction of max as threshold: %.3f " %(
         fraction_of_max_mask_threshold), \
@@ -8497,7 +8681,7 @@ def put_bounds_in_range(
      box_size=None,
      n_buffer=None,
      n_real=None,out=sys.stdout):
-  # put lower and upper inside (0,n_real) and try to make size at least minimum
+  # put lower and upper inside (0,n_real-1) and try to make size at least minimum
 
   new_lb=[]
   new_ub=[]
@@ -8525,7 +8709,7 @@ def put_bounds_in_range(
        lb=lb-boundary
        ub=ub+boundary
     if lb<0: lb=0
-    if ub>nr: ub=nr
+    if ub>=nr: ub=nr-1  # 2019-11-05 cannot go beyond na-1
     new_lb.append(lb)
     new_ub.append(ub)
   print("New bounds ...(%s,%s,%s) to (%s,%s,%s)" %(
@@ -8538,8 +8722,11 @@ def get_iterated_solvent_fraction(map=None,
     crystal_symmetry=None,
     mask_padding_fraction=None,
     fraction_of_max_mask_threshold=None,
+    solvent_content=None,
+    use_solvent_content_for_threshold=None, # use instead of fraction_of_..
     cell_cutoff_for_solvent_from_mask=None,
     mask_resolution=None,
+    return_mask_and_solvent_fraction=None,
     out=sys.stdout):
   if cell_cutoff_for_solvent_from_mask and \
    crystal_symmetry.unit_cell().volume() > cell_cutoff_for_solvent_from_mask**3:
@@ -8549,26 +8736,34 @@ def get_iterated_solvent_fraction(map=None,
       map_data=map.deep_copy(),
       mask_padding_fraction=mask_padding_fraction,
       fraction_of_max_mask_threshold=fraction_of_max_mask_threshold,
-      mask_resolution=mask_resolution)
+      solvent_content=solvent_content,
+      use_solvent_content_for_threshold=use_solvent_content_for_threshold,
+       return_mask_and_solvent_fraction=return_mask_and_solvent_fraction,
+      mask_resolution=mask_resolution,out=out)
 
   try:
     from phenix.autosol.map_to_model import iterated_solvent_fraction
-    solvent_fraction=iterated_solvent_fraction(
+    solvent_fraction,overall_mask=iterated_solvent_fraction(
       crystal_symmetry=crystal_symmetry,
       map_as_double=map,
       verbose=verbose,
       resolve_size=resolve_size,
-      return_solvent_fraction=True,
       out=out)
     if solvent_fraction<=0.989:  # means that it was 0.99 which is hard limit
-      return solvent_fraction
+      if return_mask_and_solvent_fraction:
+        return overall_mask,solvent_fraction
+      else:
+        return solvent_fraction
     else:  # use backup method
       return get_solvent_fraction_from_low_res_mask(
         crystal_symmetry=crystal_symmetry,
         map_data=map.deep_copy(),
         mask_padding_fraction=mask_padding_fraction,
         fraction_of_max_mask_threshold=fraction_of_max_mask_threshold,
-        mask_resolution=mask_resolution)
+      solvent_content=solvent_content,
+       use_solvent_content_for_threshold=use_solvent_content_for_threshold,
+        return_mask_and_solvent_fraction=return_mask_and_solvent_fraction,
+        mask_resolution=mask_resolution,out=out)
   except Exception as e:
     # catch case where map was not on proper grid
     if str(e).find("sym equiv of a grid point must be a grid point")>-1:
@@ -8584,41 +8779,55 @@ def get_iterated_solvent_fraction(map=None,
       raise Sorry(str(e)+
        "\nIt may be possible to go on by supplying solvent content"+
       "or molecular_mass")
-
     # Try to get solvent fraction with low_res mask
     return get_solvent_fraction_from_low_res_mask(
       crystal_symmetry=crystal_symmetry,
       map_data=map.deep_copy(),
       mask_padding_fraction=mask_padding_fraction,
       fraction_of_max_mask_threshold=fraction_of_max_mask_threshold,
-      mask_resolution=mask_resolution)
+      solvent_content=solvent_content,
+      use_solvent_content_for_threshold=use_solvent_content_for_threshold,
+      return_mask_and_solvent_fraction=return_mask_and_solvent_fraction,
+      mask_resolution=mask_resolution,out=out)
 
 def get_solvent_fraction_from_low_res_mask(
       crystal_symmetry=None,map_data=None,
       fraction_of_max_mask_threshold=None,
+      solvent_content=None,
+      use_solvent_content_for_threshold=None, # use instead of fraction_of
       mask_padding_fraction=None,
+      return_mask_and_solvent_fraction=None,
       mask_resolution=None,
       out=sys.stdout):
-
   overall_mask,max_in_sd_map,sd_map=get_overall_mask(map_data=map_data,
     fraction_of_max_mask_threshold=fraction_of_max_mask_threshold,
+    use_solvent_content_for_threshold=use_solvent_content_for_threshold,
     mask_padding_fraction=mask_padding_fraction,
+    solvent_fraction=solvent_content,  # note name change XXX
     crystal_symmetry=crystal_symmetry,
     resolution=mask_resolution,
     out=out)
 
   solvent_fraction=overall_mask.count(False)/overall_mask.size()
   print("Solvent fraction from overall mask: %.3f " %(solvent_fraction), file=out)
-  return solvent_fraction
+  if return_mask_and_solvent_fraction:
+    mask_data=map_data.deep_copy()
+    mask_data.as_1d().set_selected(overall_mask.as_1d(),1)
+    mask_data.as_1d().set_selected(~overall_mask.as_1d(),0)
+    return mask_data,solvent_fraction
+  else:
+    return solvent_fraction
 
 
 def get_solvent_fraction_from_molecular_mass(
+        do_not_adjust_dalton_scale=None,
         crystal_symmetry=None,molecular_mass=None,out=sys.stdout):
      map_volume=crystal_symmetry.unit_cell().volume()
      density_factor=1000*1.23 # just protein density, close enough...
      mm=molecular_mass
      molecule_fraction= mm*density_factor/map_volume
-     if molecule_fraction > 1 and mm > 1000: mm=mm/1000  # was in Da
+     if do_not_adjust_dalton_scale or molecule_fraction > 1 and mm > 1000:
+        mm=mm/1000  # was in Da
 
      solvent_fraction=max(0.01,min(1.,1 - (
          mm*density_factor/map_volume)))
@@ -11058,6 +11267,7 @@ def run(args,
     params,map_data,half_map_data_list,pdb_hierarchy,tracking_data,\
         shifted_ncs_object=get_params( #
        args,map_data=map_data,crystal_symmetry=crystal_symmetry,
+       half_map_data_list=half_map_data_list,
        ncs_object=ncs_obj,
        sequence=sequence,
        sharpening_target_pdb_inp=sharpening_target_pdb_inp,out=out)
@@ -11296,6 +11506,7 @@ def run(args,
   map_files_written=write_output_files(params,
       tracking_data=tracking_data,
       map_data=map_data,
+      half_map_data_list=half_map_data_list,
       ncs_group_obj=ncs_group_obj,
       remainder_ncs_group_obj=remainder_ncs_group_obj,
       pdb_hierarchy=pdb_hierarchy,

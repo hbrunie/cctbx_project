@@ -44,6 +44,10 @@ ensemble_refinement.ensemble_ordered_solvent.b_iso_min = 0.0
 ensemble_refinement.ensemble_ordered_solvent.b_iso_max = 100.0
 ensemble_refinement.ensemble_ordered_solvent.find_peaks.map_next_to_model.max_model_peak_dist = 3.0
 ensemble_refinement.ensemble_ordered_solvent.find_peaks.map_next_to_model.use_hydrogens = False
+ensemble_refinement.pdb_interpretation.clash_guard.nonbonded_distance_threshold = -1.0
+ensemble_refinement.pdb_interpretation.clash_guard.max_number_of_distances_below_threshold = 100000000
+ensemble_refinement.pdb_interpretation.clash_guard.max_fraction_of_distances_below_threshold = 1.0
+ensemble_refinement.pdb_interpretation.proceed_with_excessive_length_bonds=True
 """)
 
 # the extra fetch() at the end with the customized parameters gives us the
@@ -68,6 +72,8 @@ ensemble_refinement {
   ensemble_reduction = True
     .type = bool
     .help = 'Find miminium number of structures to reproduce simulation R-values'
+  ensemble_reduction_rfree_tolerance = 0.0025
+    .type = float
   verbose = -1
     .type = int
   output_file_prefix = None
@@ -239,12 +245,7 @@ ensemble_refinement {
     }
   }
   include scope mmtbx.geometry_restraints.external.external_energy_params_str
-}
-refinement.geometry_restraints.edits
-  .short_caption = Edit geometry restraints
-  .style = menu_item box auto_align
-{
-  include scope mmtbx.monomer_library.pdb_interpretation.geometry_restraints_edits_str
+  include scope mmtbx.monomer_library.pdb_interpretation.grand_master_phil_str
 }
 gui
   .help = Phenix GUI parameters, not used in command-line program
@@ -728,7 +729,8 @@ class run_ensemble_refinement(object):
         params = self.bsp)
     #Minimize number of ensemble models
     if self.params.ensemble_reduction:
-      self.ensemble_utils.ensemble_reduction()
+      self.ensemble_utils.ensemble_reduction(
+          rfree_tolerance=self.params.ensemble_reduction_rfree_tolerance)
 
     #Optimise fmodel_total k, b_aniso, k_sol, b_sol
     self.fmodel_total.set_scale_switch = 0
@@ -901,7 +903,15 @@ class run_ensemble_refinement(object):
         for atom in chain.atoms():
           if atom.element_is_hydrogen(): count_h+=1
         chain_id_non_h = ("'" + chain.id + "'", chain.atoms_size() - count_h)
-        chains_info.append(chain_id_non_h)
+        # check if this chain is already there, e.g. ligand in the same chain
+        # at the end of file
+        cur_ch_id_list = [x[0] for x in chains_info]
+        if "'" + chain.id + "'" in cur_ch_id_list:
+          ind = cur_ch_id_list.index("'" + chain.id + "'")
+          old_n_atoms = chains_info[ind][1]
+          chains_info[ind] = ("'" + chain.id + "'", old_n_atoms+chain_id_non_h[1])
+        else:
+          chains_info.append(chain_id_non_h)
       # Check all chains > 63 heavy atoms for TLS fitting
       chains_size = flex.int(zip(*chains_info)[1])
       chains_size_ok = flex.bool(chains_size > 63)
@@ -1697,18 +1707,12 @@ def run(args, command_name = "phenix.ensemble_refinement", out=None,
   # Process PDB file
   cif_objects = inputs.cif_objects
   pdb_file = inputs.pdb_file_names[0]
-  pdb_ip = mmtbx.model.manager.get_default_pdb_interpretation_params()
-  pdb_ip.pdb_interpretation.clash_guard.nonbonded_distance_threshold = -1.0
-  pdb_ip.pdb_interpretation.clash_guard.max_number_of_distances_below_threshold = 100000000
-  pdb_ip.pdb_interpretation.clash_guard.max_fraction_of_distances_below_threshold = 1.0
-  pdb_ip.pdb_interpretation.proceed_with_excessive_length_bonds=True
-
   # Model
   pdb_inp = iotbx.pdb.input(file_name=pdb_file)
   model = mmtbx.model.manager(
     model_input = pdb_inp,
     restraint_objects = cif_objects,
-    pdb_interpretation_params = pdb_ip,
+    pdb_interpretation_params = params.ensemble_refinement,
     log = log)
   if model.get_number_of_models() > 1:
     raise Sorry("Multiple models not supported.")
@@ -1732,7 +1736,7 @@ def run(args, command_name = "phenix.ensemble_refinement", out=None,
     model = mmtbx.model.manager(
       model_input = pdb_inp,
       restraint_objects = cif_objects,
-      pdb_interpretation_params = pdb_ip,
+      pdb_interpretation_params = params.ensemble_refinement,
       log = log)
 
   # Refinement flags

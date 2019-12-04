@@ -1,7 +1,7 @@
 '''
 Author      : Lyubimov, A.Y.
 Created     : 12/12/2017
-Last Changed: 01/29/2018
+Last Changed: 06/20/2019
 Description : SIMTBX (nanoBragg) GUI Windows / frames
 '''
 from __future__ import absolute_import, division, print_function
@@ -18,7 +18,7 @@ from matplotlib.figure import Figure
 from iotbx import phil as ip
 from simtbx.nanoBragg import nanoBragg_gui_dialogs as dlg
 from simtbx.nanoBragg import nanoBragg_threads as thr
-from iota.components import iota_ui_controls as ct
+from iota.components.gui import controls as ct
 from iota.components.iota_utils import InputFinder, WxFlags, noneset
 from six.moves import range
 
@@ -308,9 +308,9 @@ class FileListCtrl(ct.CustomListCtrl):
     # Add file / folder buttons
     self.button_sizer = wx.BoxSizer(wx.HORIZONTAL)
     self.btn_add_file = wx.Button(self, label='Add File...')
-    #self.btn_add_dir = wx.Button(self, label='Add Folder...')
+    #self.btn_browse = wx.Button(self, label='Add Folder...')
     self.button_sizer.Add(self.btn_add_file)
-    #self.button_sizer.Add(self.btn_add_dir, flag=wx.LEFT, border=10)
+    #self.proc_sizer.Add(self.btn_browse, flag=wx.LEFT, border=10)
 
     self.sizer.Add(self.button_sizer, flag=wx.TOP | wx.BOTTOM, border=10)
 
@@ -343,7 +343,7 @@ class FileListCtrl(ct.CustomListCtrl):
                     'background',
                     'raw image file']
     preferred_selection = 0
-    inputs, input_type = ginp.get_input(path, filter=False)
+    inputs, input_type = ginp.get_input(path, filter_results=False)
 
     if input_type == 'data (MTZ)':
       input_type = 'structure factors'

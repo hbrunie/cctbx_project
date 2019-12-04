@@ -35,7 +35,7 @@ void nanoBraggSpotsCUDA(int deviceId, int timelog, int spixels, int fpixels, int
                         float * floatimage /*out*/, double * omega_sum/*out*/,
                         int * sumn /*out*/, double * sum /*out*/,
                         double * sumsqr /*out*/, double * max_I/*out*/,
-                        double * max_I_x/*out*/, double * max_I_y /*out*/);
+                        double * max_I_x/*out*/, double * max_I_y /*out*/, double spot_scale);
 
 // new CUDA path
 extern "C"
@@ -176,7 +176,7 @@ nanoBragg::add_nanoBragg_spots_cuda()
                      float_floatimage, &omega_sum,
                      &sumn, &sum,
                      &sumsqr, &max_I,
-                     &max_I_x, &max_I_y);
+                     &max_I_x, &max_I_y, spot_scale);
 #else
   throw SCITBX_ERROR("no CUDA implementation of nanoBragg_add_spots");
 #endif

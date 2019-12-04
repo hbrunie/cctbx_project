@@ -513,11 +513,20 @@ class linking_mixins(object):
       #
       # moving sections of this to outside the loop
       #  - SF4
+      #  - ZN-CYS-HIS
       #
       if link_metals:
-        moved = ['SF4', 'F3S']
+        moved = ['SF4', 'F3S', 'FES']
         if ( atom1.parent().resname in moved or
              atom2.parent().resname in moved
+             ): continue
+        moved = ['ZN', 'CYS']
+        if ( atom1.parent().resname.strip() in moved and
+             atom2.parent().resname.strip() in moved
+             ): continue
+        moved = ['ZN', 'HIS']
+        if ( atom1.parent().resname.strip() in moved and
+             atom2.parent().resname.strip() in moved
              ): continue
       if verbose:
         print(i_seq, j_seq, atom1.quote(), end=' ')
@@ -750,7 +759,12 @@ Residue classes
       #
       if link:
         # apply a standard link
-        origin_id = origin_ids['link_%s' % key]
+        origin_id = origin_ids.get_origin_id('link_%s' % key,
+                                             return_none_if_absent=True,
+                                             )
+        if origin_id is None:
+          # user defined links should not be applied here
+          continue
         count, bond_i_seqs = _apply_link_using_proxies(
           link,
           atom_group1,
@@ -814,9 +828,6 @@ Residue classes
         links.setdefault(key, [])
         links[key].append([atom_group1, atom_group2])
         links[key][-1]+=bond_i_seqs
-        print('self._cif')
-        self._cif.cif["link_%s" % key] = cif
-        assert 0
         continue
       elif link:
         origin_id = origin_ids['link_%s' % key]

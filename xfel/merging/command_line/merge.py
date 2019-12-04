@@ -1,9 +1,27 @@
 from __future__ import absolute_import, division, print_function
 # LIBTBX_SET_DISPATCHER_NAME cctbx.xfel.merge
-import sys
 from xfel.merging.application.mpi_helper import mpi_helper
 from xfel.merging.application.mpi_logger import mpi_logger
-from six.moves import cStringIO as StringIO
+
+default_steps = [
+  'input',
+  'balance', # balance input load
+  'model_scaling', # build full Miller list, model intensities, and resolution binner - for scaling and post-refinement
+  'modify', # apply polarization correction, etc.
+  'filter', # reject whole experiments or individual reflections
+  'errors_premerge', # correct errors using a per-experiment algorithm, e.g. ha14
+  'scale',
+  'postrefine',
+  'statistics_unitcell', # if required, save the average unit cell to the phil parameters
+  'statistics_beam', # save the average wavelength to the phil parameters
+  'model_statistics', # build full Miller list, model intensities, and resolution binner - for statistics. May use average unit cell.
+  'statistics_resolution', # calculate resolution statistics for experiments
+  'group', # re-distribute reflections over the ranks, so that all measurements of every HKL are gathered at the same rank
+  'errors_merge', # correct errors using a per-HKL algorithm, e.g. errors_from_sample_residuals
+  'statistics_intensity', # calculate resolution statistics for intensities
+  'merge', # merge HKL intensities, MPI-gather all HKLs at rank 0, output "odd", "even" and "all" HKLs as mtz files
+  'statistics_intensity_cxi', # run cxi_cc code ported from cxi-xmerge
+]
 
 class Script(object):
   '''A class for running the script.'''
@@ -36,23 +54,20 @@ class Script(object):
         epilog=help_message)
 
       # Parse the command line. quick_parse is required for MPI compatibility
-      try:
-        bkp = sys.stdout
-        sys.stdout = out = StringIO()
-        params, options = self.parser.parse_args(show_diff_phil=True,quick_parse=True)
-        self.mpi_logger.log(out.getvalue())
-        if self.mpi_helper.rank == 0:
-          self.mpi_logger.main_log(out.getvalue())
-      finally:
-        sys.stdout = bkp
+      params, options = self.parser.parse_args(show_diff_phil=True,quick_parse=True)
+
+      # Log the modified phil parameters
+      diff_phil_str = self.parser.diff_phil.as_str()
+      if diff_phil_str is not "":
+        self.mpi_logger.main_log("The following parameters have been modified:\n%s"%diff_phil_str)
 
       # prepare for transmitting input parameters to all ranks
-      self.mpi_logger.log("Broadcasting input parameters...")
       transmitted = dict(params = params, options = options)
     else:
       transmitted = None
 
     # broadcast parameters and options to all ranks
+    self.mpi_logger.log("Broadcasting input parameters...")
     self.mpi_logger.log_step_time("BROADCAST_INPUT_PARAMS")
 
     transmitted = self.mpi_helper.comm.bcast(transmitted, root = 0)
@@ -74,7 +89,6 @@ class Script(object):
     if self.mpi_helper.rank == 0:
       self.mpi_logger.main_log(str(time_now))
 
-
     self.mpi_logger.log_step_time("TOTAL")
 
     self.mpi_logger.log_step_time("PARSE_INPUT_PARAMS")
@@ -82,51 +96,36 @@ class Script(object):
     self.mpi_logger.log_step_time("PARSE_INPUT_PARAMS", True)
 
     # Create the workers using the factories
+    self.mpi_logger.log_step_time("CREATE_WORKERS")
     from xfel.merging import application
     import importlib
 
     workers = []
-    for step in ['input',
-                 'model scaling', # the full miller set is based on the target unit cell
-                 'modify', # polarization correction, etc.
-                 'edit',   # add asu HKL column, remove unnecessary columns from reflection table
-                 'filter', # unit cell, I/Sigma
-                 'errors pre_merge', # e.g. ha14
-                 'scale',
-                 'postrefine',
-                 'statistics unit_cell', # if required, saves the average unit cell to the phil parameters
-                 'statistics beam', # saves the average wavelength to the phil parameters
-                 'model statistics', # if required, the full miller set is based on the average unit cell
-                 'statistics experiment_resolution',
-                 'group', # MPI-alltoall: this must be done before any analysis or merging that requires all measurements of an HKL
-                 'errors post_merge', # e.g. errors_from_sample_residuals
-                 'statistics intensity',
-                 'merge', # merge HKL intensities, MPI-gather all HKLs at rank 0, output "odd", "even" and "all" HKLs as mtz files
-                 'statistics intensity cxi', # follows the merge step and uses cxi_cc code ported from cxi-xmerge
-                 ]:
-
+    steps = default_steps if self.params.dispatch.step_list is None else self.params.dispatch.step_list
+    for step in steps:
       step_factory_name = step
       step_additional_info = []
 
-      step_info = step.split(' ')
+      step_info = step.split('_')
       assert len(step_info) > 0
       if len(step_info) > 1:
         step_factory_name = step_info[0]
         step_additional_info = step_info[1:]
 
       factory = importlib.import_module('xfel.merging.application.' + step_factory_name + '.factory')
-      workers.extend(factory.factory.from_parameters(self.params, step_additional_info))
+      workers.extend(factory.factory.from_parameters(self.params, step_additional_info, mpi_helper=self.mpi_helper, mpi_logger=self.mpi_logger))
 
     # Perform phil validation up front
     for worker in workers:
       worker.validate()
+    self.mpi_logger.log_step_time("CREATE_WORKERS", True)
 
     # Do the work
     experiments = reflections = None
     step = 0
     while(workers):
       worker = workers.pop(0)
-
+      self.mpi_logger.log_step_time("STEP_" + worker.__repr__())
       # Log worker name, i.e. execution step name
       step += 1
       if step > 1:
@@ -141,6 +140,25 @@ class Script(object):
 
       # Execute worker
       experiments, reflections = worker.run(experiments, reflections)
+      self.mpi_logger.log_step_time("STEP_" + worker.__repr__(), True)
+
+    if self.params.output.save_experiments_and_reflections:
+      import os
+      if 'id' not in reflections:
+        from dials.array_family import flex
+        id_ = flex.int(len(reflections), -1)
+        for expt_number, expt in enumerate(experiments):
+          sel = reflections['exp_id'] == expt.identifier
+          id_.set_selected(sel, expt_number)
+        reflections['id'] = id_
+
+      if self.mpi_helper.size == 1:
+        filename_suffix = ""
+      else:
+        filename_suffix = "_%06d"%self.mpi_helper.rank
+
+      reflections.as_pickle(os.path.join(self.params.output.output_dir, "%s%s.refl"%(self.params.output.prefix, filename_suffix)))
+      experiments.as_file(os.path.join(self.params.output.output_dir, "%s%s.expt"%(self.params.output.prefix, filename_suffix)))
 
     self.mpi_logger.log_step_time("TOTAL", True)
 

@@ -6,23 +6,13 @@ from cctbx import miller
 import os
 from six.moves import cStringIO as StringIO
 
-try:
-  import resource
-  import platform
-  def get_memory_usage():
-    # getrusage returns kb on linux, bytes on mac
-    units_per_mb = 1024
-    if platform.system() == "Darwin":
-      units_per_mb = 1024*1024
-    return ('Memory usage: %.1f MB' % (int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) / units_per_mb))
-except ImportError:
-  def debug_memory_usage():
-    pass
-
 class merger(worker):
   """
   Merges multiple measurements of symmetry-reduced HKLs.
   """
+  def __init__(self, params, mpi_helper=None, mpi_logger=None):
+    super(merger, self).__init__(params=params, mpi_helper=mpi_helper, mpi_logger=mpi_logger)
+
   def __repr__(self):
     return "Merge multiple measurements of symmetry-reduced HKLs"
 
@@ -62,7 +52,8 @@ class merger(worker):
       self.logger.log_step_time("MERGE", True)
 
       # output as mtz
-      self.output_reflections_mtz(final_merged_reflection_table, selection_name)
+      if len(final_merged_reflection_table) > 0:
+        self.output_reflections_mtz(final_merged_reflection_table, selection_name)
 
       # free the memory
       del all_merged_reflection_tables

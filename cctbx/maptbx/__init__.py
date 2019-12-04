@@ -23,6 +23,7 @@ from libtbx import group_args
 from scitbx import fftpack
 from libtbx.test_utils import approx_equal
 from cctbx import uctbx
+import scitbx.math
 
 debug_peak_cluster_analysis = os.environ.get(
   "CCTBX_MAPTBX_DEBUG_PEAK_CLUSTER_ANALYSIS", "")
@@ -48,7 +49,8 @@ class _():
       max_boundaries.append(maxb)
     return min_boundaries, max_boundaries
 
-def smooth_map(map, crystal_symmetry, rad_smooth, method="exp"):
+def smooth_map(map, crystal_symmetry, rad_smooth, method="exp",
+     non_negative=True):
   from cctbx import miller
   assert method in ["exp", "box_average"]
   map_smooth = None
@@ -57,7 +59,9 @@ def smooth_map(map, crystal_symmetry, rad_smooth, method="exp"):
       map              = map,
       crystal_symmetry = crystal_symmetry,
       include_000      = True)
-    ss = 1./flex.pow2(f_map.d_spacings().data()) / 4.
+    ddd=f_map.d_spacings().data()
+    ddd.set_selected(ddd == -1 , 1.e+10)  # d_spacing for (0,0,0) was set to -1
+    ss = 1./flex.pow2(ddd) / 4.
     b_smooth = 8*math.pi**2*rad_smooth**2
     smooth_scale = flex.exp(-b_smooth*ss)
     f_map = f_map.array(data = f_map.data()*smooth_scale)
@@ -70,7 +74,8 @@ def smooth_map(map, crystal_symmetry, rad_smooth, method="exp"):
       fourier_coefficients = f_map)
     fft_map.apply_volume_scaling()
     map_smooth = fft_map.real_map_unpadded()
-    map_smooth = map_smooth.set_selected(map_smooth<0., 0)
+    if non_negative:
+      map_smooth = map_smooth.set_selected(map_smooth<0., 0)
   elif(method=="box_average"): # assume 0/1 binary map
     assert abs(flex.max(map)-1.)<1.e-6
     mmin = flex.min(map)
@@ -1218,6 +1223,7 @@ def map_peak_3d_as_2d(
           center=center_cart)
         xf,yf,zf = unit_cell.fractionalize([xc,yc,zc])
         rho.append(map_data.eight_point_interpolation([xf,yf,zf]))
+        #rho.append(map_data.tricubic_interpolation([xf,yf,zf]))
     rho_1d.append(flex.mean(rho))
   return dist, rho_1d
 
@@ -1355,17 +1361,17 @@ Fourier image of specified resolution, etc.
 
   def __init__(self, scattering_type, scattering_table="wk1995"):
     adopt_init_args(self, locals())
-    self.xray_structure = self.get_xray_structure()
-    self.scr = self.xray_structure.scattering_type_registry()
+    self.scr = self.get_xray_structure(box=1, b=0).scattering_type_registry()
     self.uff = self.scr.unique_form_factors_at_d_star_sq
 
-  def get_xray_structure(self):
-    cs = crystal.symmetry((10, 10, 10, 90, 90, 90), "P 1")
+  def get_xray_structure(self, box, b):
+    cs = crystal.symmetry((box, box, box, 90, 90, 90), "P 1")
     sp = crystal.special_position_settings(cs)
     from cctbx import xray
     sc = xray.scatterer(
       scattering_type = self.scattering_type,
-      site            = (0, 0, 0))
+      site            = (0, 0, 0),
+      u               = adptbx.b_as_u(b))
     scatterers = flex.xray_scatterer([sc])
     xrs = xray.structure(sp, scatterers)
     xrs.scattering_type_registry(table = self.scattering_table)
@@ -1406,10 +1412,11 @@ Fourier image of specified resolution, etc.
             d_min,
             b_iso,
             d_max=None,
+            radius_min=0,
             radius_max=5.,
             radius_step=0.001,
             n_integration_steps=2000):
-    r = 0.0
+    r = radius_min
     assert d_max != 0.
     if(d_max is None): s_min=0
     else:              s_min=1./d_max
@@ -1425,6 +1432,7 @@ Fourier image of specified resolution, etc.
       r+=radius_step
     # Fine first inflection point
     first_inflection_point=None
+    i_first_inflection_point=None
     size = image_values.size()
     second_derivatives = flex.double()
     for i in range(size):
@@ -1436,13 +1444,89 @@ Fourier image of specified resolution, etc.
         dxx = second_derivatives[i-1]*radius_step**2
       if(first_inflection_point is None and dxx>0):
         first_inflection_point = (radii[i-1]+radii[i])/2.
+        i_first_inflection_point=i
       second_derivatives.append(dxx/radius_step**2)
     return group_args(
-      radii                  = radii,
-      image_values           = image_values,
-      first_inflection_point = first_inflection_point,
-      radius                 = first_inflection_point*2,
-      second_derivatives     = second_derivatives)
+      radii                    = radii,
+      image_values             = image_values,
+      first_inflection_point   = first_inflection_point,
+      i_first_inflection_point = i_first_inflection_point,
+      radius                   = first_inflection_point*2,
+      second_derivatives       = second_derivatives)
+
+  def image_from_miller_indices(self, miller_indices, b_iso, uc,
+                                radius_max, radius_step):
+    p2 = flex.double()
+    tmp = flex.double()
+    for mi in miller_indices:
+      p2.append(self.form_factor(ss=uc.d_star_sq(mi)/4, b_iso=b_iso))
+      tmp.append( 2*math.pi*mi[2] )
+    mv  = flex.double()
+    rad = flex.double()
+    z=0.0
+    while z < radius_max:
+      result = 0
+      for mi, p2i, tmpi in zip(miller_indices, p2, tmp):
+        result += p2i*math.cos(tmpi*z)
+      rad.append(z)
+      mv.append(result*2)
+      z+=radius_step
+    return group_args(radii=rad, image_values=mv/uc.volume())
+
+  def image_from_3d(self, box, b, step, unit_cell, space_group_info,
+                          miller_array):
+    from cctbx import miller
+    xrs = self.get_xray_structure(box=box, b=b)
+    fc = miller_array.structure_factors_from_scatterers(
+      xray_structure = xrs, algorithm = "direct").f_calc()
+    cg = crystal_gridding(
+      unit_cell         = unit_cell,
+      space_group_info  = space_group_info,
+      step              = step,
+      symmetry_flags    = use_space_group_symmetry)
+    fft_map = miller.fft_map(
+      crystal_gridding     = cg,
+      fourier_coefficients = fc)
+    fft_map.apply_volume_scaling()
+    map_data = fft_map.real_map_unpadded()
+    mv = flex.double()
+    radii = flex.double()
+    r = 0
+    while r < box:
+      mv_ = map_data.eight_point_interpolation([r/box,0,0])
+      mv.append(mv_)
+      radii.append(r)
+      r+=step
+    return group_args(radii=radii, image_values=mv)
+
+  def one_gaussian_exact(self, r, A0, B0, b=0):
+    cmn = 4*math.pi/(B0+b)
+    return A0*cmn**1.5 * math.exp(-math.pi*cmn*r**2)
+
+  def one_gaussian_approximation(self, d_min, b, use_inflection_point=True):
+    ib0 = self.image(
+      d_min = d_min, b_iso = 0, radius_max=5, radius_step=0.01)
+    if(use_inflection_point):
+      i_cut = ib0.i_first_inflection_point
+    else:
+      i_cut = None
+      for i in xrange(ib0.radii.size()):
+        if(ib0.image_values[i]<=0):
+          rad_cut = ib0.radii[i-1]
+          i_cut = i-1
+          break
+    assert i_cut is not None
+    # this gives a*exp(-b*x**2)
+    r = scitbx.math.gaussian_fit_1d_analytical(
+      x = ib0.radii[:i_cut], y = ib0.image_values[:i_cut])
+    B0 = 4*math.pi**2/r.b
+    A0 = r.a/(r.b/math.pi)**1.5
+    image_approx_values = flex.double()
+    for rad in ib0.radii:
+      v = self.one_gaussian_exact(r=rad, A0=A0, B0=B0, b=b)
+      image_approx_values.append(v)
+    return group_args(image_b0=ib0, image_approx_at_b = image_approx_values,
+      i_cut = i_cut, n_points = ib0.radii.size())
 
 def sharpen2(map, xray_structure, resolution, file_name_prefix):
   from cctbx import miller

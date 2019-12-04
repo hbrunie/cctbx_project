@@ -26,16 +26,16 @@ ligand_lib_dir = libtbx.env.find_in_repositories(
 cwd=os.getcwd()
 
 #make sure blast exists.  Never had a problem but probably won't hurt.
-def checkblast():
+def checkblast(binary="blastp"):
   phenix_blast_exe=''
   systype=sys.platform #linux2,darwin,win32
   sysname='Linux'
-  phenix_blast_exe='blastall_%s'%(systype)
+  phenix_blast_exe='%s_%s'%(binary,systype)
   if systype=='win32':
-    phenix_blast_exe='blastall_%s.exe'%(systype)
+    phenix_blast_exe='%s_%s.exe'%(binary,systype)
     sysname='Windows'
   elif systype=='darwin':
-    phenix_blast_exe='blastall_%s'%(systype)
+    phenix_blast_exe='%s_%s'%(binary,systype)
     sysname='OSX'
   else:
     pass
@@ -44,7 +44,7 @@ def checkblast():
   if os.path.exists(phenix_blast):
     blastpath=phenix_blast
     blastexe=phenix_blast_exe
-    print('%s version is running...\n'%sysname)
+    #print('%s version is running...\n'%sysname)
   else:
     print('BLAST executable does not exist. please check your Phenix installation.')
     sys.exit(0)
@@ -59,8 +59,8 @@ class pdbaa(object):
     self.seq=seq
     self.output=output
 
-  def run(self, debug=False):
-    blastpath=checkblast()
+  def run(self, debug=False, binary="blastp"):
+    blastpath=checkblast(binary)
     curdir=os.getcwd()
     if self.workdir is None:
       self.workdir=curdir
@@ -74,14 +74,17 @@ class pdbaa(object):
     fastaline=">%s\n%s\n"%(self.prefix,self.seq)
     f=open(fasta_path,'w').writelines(fastaline)
     dbname="pdbaa.00"
-    outfmt="-m 7" #xml_out
+    outfmt="-outfmt 5" #xml_out
     blastdb=os.path.join(ligand_lib_dir,dbname)
-
-    blastrun_seq=" -p blastp -i %s -a 8 -F F -W 3 -G 11 -E 2 \
-        -V F -e 1E-3 %s -d %s"%(fasta_path,outfmt, blastdb)
+    if binary=="blastall":
+      blastrun_seq=" -p blastp -i %s -a 8 -F F -W 3 -G 11 -E 2 \
+          -V F -e 1E-3 -m 7 -d %s"%(fasta_path, blastdb)
+    else:
+      blastrun_seq= "-query %s -matrix BLOSUM62 -num_threads 8 -word_size 3 -gapopen 11\
+        -gapextend 2 -evalue 1E-3 %s -db %s"%(fasta_path, outfmt, blastdb)
 
     cmds="%s %s"%(blastpath,blastrun_seq)
-    #print cmds
+    #print(cmds)
     try:
       result = easy_run.fully_buffered(
         command=cmds,

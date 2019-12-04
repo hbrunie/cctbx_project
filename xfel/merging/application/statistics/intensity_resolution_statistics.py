@@ -131,6 +131,9 @@ class cross_correlation_table(object):
 class intensity_resolution_statistics(worker):
   '''Calculates hkl intensity statistics for resolution bins'''
 
+  def __init__(self, params, mpi_helper=None, mpi_logger=None):
+    super(intensity_resolution_statistics, self).__init__(params=params, mpi_helper=mpi_helper, mpi_logger=mpi_logger)
+
   def __repr__(self):
     return 'Intensity resolution statistics'
 
@@ -311,19 +314,15 @@ class intensity_resolution_statistics(worker):
     self.mm_sum     = flex.int(n_bins, 0) # number of observed asu hkls with multiplicity > 1
 
     # Calculate, format and output statistics for each rank
-    if reflections.size() > 0:
-
-      self.logger.log("Calculating intensity statistics...")
-
-      self.calculate_intensity_statistics(reflections)
-
-      Intensity_Table = self.build_intensity_table(
-                                                  I_sum = self.I_sum,
-                                                  Isig_sum = self.Isig_sum,
-                                                  n_sum = self.n_sum,
-                                                  m_sum = self.m_sum,
-                                                  mm_sum = self.mm_sum)
-
+    self.logger.log("Calculating intensity statistics...")
+    self.calculate_intensity_statistics(reflections)
+    Intensity_Table = self.build_intensity_table(
+                                                I_sum = self.I_sum,
+                                                Isig_sum = self.Isig_sum,
+                                                n_sum = self.n_sum,
+                                                m_sum = self.m_sum,
+                                                mm_sum = self.mm_sum)
+    if self.params.output.log_level == 0:
       self.logger.log(Intensity_Table.get_table_text(), rank_prepend=False)
 
     # Accumulate statistics from all ranks
@@ -347,26 +346,26 @@ class intensity_resolution_statistics(worker):
 
   def calculate_intensity_statistics(self, reflections):
     '''Calculate statistics for hkl intensities distributed over resolution bins'''
+    # The count of all reflections in the input reflection list, not restricted by any resolution limits, multiplicity thresholds, etc.
+    zero_intensity_count_all      = (reflections['intensity.sum.value'] == 0.0).count(True)
+    positive_intensity_count_all  = (reflections['intensity.sum.value'] >  0.0).count(True)
+    negative_intensity_count_all  = (reflections['intensity.sum.value'] <  0.0).count(True)
 
-    #used_reflections = flex.reflection_table()
-    zero_intensity_count_all = 0
+    # The count of reflections filtered out from the input list by resolution limits
     zero_intensity_count_resolution_limited = 0
-
-    positive_intensity_count_all = 0
     positive_intensity_count_resolution_limited = 0
-
-    negative_intensity_count_all = 0
     negative_intensity_count_resolution_limited = 0
 
+    # a list of reflections _actually_ used for the intenisty statistics calculations
+    #used_reflections = flex.reflection_table()
+
     # How many bins do we have?
-    n_bins = self.resolution_binner.n_bins_all() # (self.params.statistics.n_bins + 2), 2 - to account for the hkls outside of the binner resolution range
+    n_bins = self.resolution_binner.n_bins_all() # (self.params.statistics.n_bins + 2), 2 - to account for the HKLs outside of the binner resolution range
 
+    # Calculate auxiliary per-bin sums needed for the intensity statistics
     for refls in reflection_table_utils.get_next_hkl_reflection_table(reflections=reflections):
-      assert refls.size() > 0
-
-      zero_intensity_count_all += ((refls['intensity.sum.value'] == 0.0).count(True))
-      positive_intensity_count_all += ((refls['intensity.sum.value'] > 0.0).count(True))
-      negative_intensity_count_all += ((refls['intensity.sum.value'] < 0.0).count(True))
+      if refls.size() == 0:
+        break # unless the input "reflections" list is empty, generated "refls" lists cannot be empty
 
       hkl = refls[0]['miller_index_asymmetric']
       if hkl in self.hkl_resolution_bins:
@@ -374,10 +373,9 @@ class intensity_resolution_statistics(worker):
         i_bin = self.hkl_resolution_bins[hkl]
 
         if i_bin > 0 and i_bin < n_bins - 1:
-          #used_reflections.extend(refls)
-          zero_intensity_count_resolution_limited += ((refls['intensity.sum.value'] == 0.0).count(True))
-          positive_intensity_count_resolution_limited += ((refls['intensity.sum.value'] > 0.0).count(True))
-          negative_intensity_count_resolution_limited += ((refls['intensity.sum.value'] < 0.0).count(True))
+          zero_intensity_count_resolution_limited     += (refls['intensity.sum.value'] == 0.0).count(True)
+          positive_intensity_count_resolution_limited += (refls['intensity.sum.value'] >  0.0).count(True)
+          negative_intensity_count_resolution_limited += (refls['intensity.sum.value'] <  0.0).count(True)
 
           refls = refls.select(refls['intensity.sum.variance'] > 0.0)
 
@@ -391,6 +389,7 @@ class intensity_resolution_statistics(worker):
             weights_array = flex.double(refls.size(), 1.0) / refls['intensity.sum.variance']
             self.I_sum[i_bin]     += flex.sum(weighted_intensity_array) / flex.sum(weights_array)
             self.Isig_sum[i_bin]  += flex.sum(weighted_intensity_array) / math.sqrt(flex.sum(weights_array))
+            #used_reflections.extend(refls)
 
     self.logger.log_step_time("INTENSITY_HISTOGRAM")
 

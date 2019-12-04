@@ -42,7 +42,7 @@ class pdb_hierarchy_builder(crystal_symmetry_builder):
     seq_id = self._wrap_loop_if_needed(cif_block, "_atom_site.auth_seq_id")
     if seq_id is None:
       seq_id = self._wrap_loop_if_needed(cif_block, "_atom_site.label_seq_id") # residue number
-    assert [atom_labels, alt_id, auth_asym_id, comp_id, entity_id, seq_id].count(None) == 0, "someting is not present"
+    assert [atom_labels, alt_id, auth_asym_id, comp_id, entity_id, seq_id].count(None) == 0, "something is not present"
     assert type_symbol is not None
 
     atom_site_fp = cif_block.get('_atom_site.phenix_scat_dispersion_real')
@@ -528,10 +528,10 @@ class cif_input(iotbx.pdb.pdb_input_mixin):
   def get_program_name(self):
     software_name = self.cif_block.get('_software.name')
     software_classification = self.cif_block.get('_software.classification')
-    if (isinstance(software_classification, string_types) and
-        software_classification == 'refinement'):
-      return software_name
-    if software_classification is not None:
+    if isinstance(software_classification, string_types):
+      if software_classification == 'refinement':
+        return software_name
+    elif software_classification is not None:
       i = flex.first_index(software_classification, 'refinement')
       if i >= 0: return software_name[i]
 
@@ -540,11 +540,17 @@ class cif_input(iotbx.pdb.pdb_input_mixin):
     r1 = _float_or_None(self.cif_block.get('_reflns.d_resolution_high'))
     r2 = _float_or_None(self.cif_block.get('_reflns.resolution'))
     r3 = _float_or_None(self.cif_block.get('_em_3d_reconstruction.resolution'))
-    for r in [r1,r2,r3]:
+    r4 = _float_or_None(self.cif_block.get('_refine.ls_d_res_high'))
+    for r in [r1,r2,r3,r4]:
       if(r is not None): result.append(r)
     result = list(set(result))
     if(len(result)  ==0): result = None
     elif(len(result)==1): result = result[0]
+    elif(len(result)>1):
+      if(r4 is None):
+        result = r1
+      else:
+        result = min(result)
     return result
 
   def extract_tls_params(self, hierarchy):
@@ -685,14 +691,17 @@ class cif_input(iotbx.pdb.pdb_input_mixin):
         else:
           r = [(self.cif_block.get('_struct_ncs_oper.matrix[%s][%s]' %(x,y)))
             for x,y in ('11', '12', '13', '21', '22', '23', '31','32', '33')]
-        rots.append(matrix.sqr([float(r_elem) for r_elem in r]) )
-        if len(ncs_oper) > 1:
-          t = [(self.cif_block.get('_struct_ncs_oper.vector[%s]' %x)[i])
-            for x in '123']
-        else:
-          t = [(self.cif_block.get('_struct_ncs_oper.vector[%s]' %x))
-            for x in '123']
-        trans.append(matrix.col([float(t_elem) for t_elem in t]))
+        try:
+          rots.append(matrix.sqr([float(r_elem) for r_elem in r]) )
+          if len(ncs_oper) > 1:
+            t = [(self.cif_block.get('_struct_ncs_oper.vector[%s]' %x)[i])
+              for x in '123']
+          else:
+            t = [(self.cif_block.get('_struct_ncs_oper.vector[%s]' %x))
+              for x in '123']
+          trans.append(matrix.col([float(t_elem) for t_elem in t]))
+        except ValueError:
+          raise Sorry("Error in _struct_ncs information. Likely '?' instead of a number.")
     # sort records by serial number
     serial_number.sort()
     items_order = [i for (_,i) in serial_number]
@@ -723,7 +732,7 @@ class cif_input(iotbx.pdb.pdb_input_mixin):
 
   def _used_what_restraints(self, what):
     rc = False
-    for cif_key, cif_block in self.cif_model.iteritems():
+    for cif_key, cif_block in self.cif_model.items():
       target = cif_block.get("_refine.pdbx_stereochemistry_target_values")
       if (target is not None) and (what in target):
         rc = True

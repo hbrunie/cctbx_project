@@ -4,7 +4,7 @@ from six.moves import range
 '''
 Author      : Lyubimov, A.Y.
 Created     : 10/10/2014
-Last Changed: 03/25/2019
+Last Changed: 11/25/2019
 Description : Runs spotfinding, indexing, refinement and integration using
               subclassed DIALS Stills Processor module. Selector class
               applies filters based on unit cell, space group, etc.
@@ -17,9 +17,10 @@ from iotbx.phil import parse
 from cctbx import sgtbx, crystal
 import copy
 
+from dials.util import log
 from dials.array_family import flex
-from dials.algorithms.indexing.symmetry import \
-  refined_settings_factory_from_refined_triclinic
+from dials.algorithms.indexing.bravais_settings import \
+  refined_settings_from_refined_triclinic
 from dials.command_line.stills_process import phil_scope, Processor
 from dials.command_line.refine_bravais_settings import phil_scope as sg_scope
 from dials.command_line.refine_bravais_settings import \
@@ -33,11 +34,12 @@ cctbx_xfel
   .alias = Processing Options
 {
   target = None
-    .type = str
+    .type = path
     .multiple = False
     .help = Target (.phil) file with integration parameters for DIALS
-    .alias = Target File
+    .alias = Processing script
     .expert_level = 0
+    .style = path:file
   target_space_group = None
     .type = space_group
     .help = Target space (or point) group (if known)
@@ -55,12 +57,15 @@ cctbx_xfel
     .expert_level = 2
   significance_filter
     .help = Set to True and add value to determine resolution based on I/sigI
-    .alias = Significance Filter
+    .alias = I/sig(I) cutoff
     .expert_level = 1
+    .style = grid:auto
   {
     flag_on = True
       .type = bool
       .help = Set to true to activate significance filter
+      .alias = Significance filter
+      .style = scope_switch
     sigma = 1.0
       .type = float
       .help = Sigma level to determine resolution cutoff
@@ -69,7 +74,7 @@ cctbx_xfel
     .type = bool
     .help = Will determine sg and reindex if no target space group supplied
     .alias = Determine space group and reindex
-    .expert_level = 1
+    .expert_level = 0
   auto_threshold = False
     .type = bool
     .help = Set to True to estimate global threshold for each image
@@ -78,19 +83,23 @@ cctbx_xfel
   filter
       .help = Throw out results that do not fit user-defined parameters
       .alias = Filters
-      .expert_level = 2
+      .expert_level = 0
+      .style = grid:auto
     {
       flag_on = False
         .type = bool
-        .help = Set to True to activate prefilter
-      crystal_system = None
-        .type = str
-        .help = Target crystal system, e.g. "Tetragonal"
+        .help = Set to True to activate filters
+        .alias = Use filters
+        .style = scope_switch
+      crystal_system = None Triclinic Monoclinic Orthorhombic Tetragonal Trigonal Hexagonal Cubic
+        .type = choice
+        .help = Predicted crystal system for processed data
         .alias = Crystal System
       pointgroup = None
-        .type = str
-        .help = Target point group, e.g. "P422"
+        .type = space_group
+        .help = Target Bravais lattice, e.g. "P422"
         .alias = Bravais Lattice
+        .expert_level = 1
       unit_cell = None
         .type = unit_cell
         .help = In format of "a, b, c, alpha, beta, gamma", e.g. 79.4, 79.4, 38.1, 90.0, 90.0, 90.0
@@ -99,14 +108,16 @@ cctbx_xfel
         .type = float
         .help = Maximum allowed unit cell deviation from target
         .alias = Unit cell tolerance
+        .expert_level = 1
       min_reflections = None
         .type = int
         .help = Minimum integrated reflections per image
-        .alias = Reflections
+        .alias = Min. no. reflections
+        .expert_level = 1
       min_resolution = None
         .type = float
         .help = Minimum resolution for accepted images
-        .alias = Resolution
+        .alias = Resolution cutoff
     }
 }
 '''
@@ -131,6 +142,7 @@ class IOTAImageProcessor(Processor):
     self.write_pickle = write_pickle
     self.write_logs = write_logs
     self.last_stage = last_stage
+    self.dlog_bookmark = 0
 
     # Get Processor PHIL and initialize Processor
     if self.iparams.cctbx_xfel.target:
@@ -207,40 +219,57 @@ class IOTAImageProcessor(Processor):
 
 
   def refine_bravais_settings(self, reflections, experiments):
+
+    # configure DIALS logging
+    if self.dials_log:
+      log.config(verbosity=1, logfile=self.dials_log)
+
     proc_scope = phil_scope.format(python_object=self.params)
     sgparams = sg_scope.fetch(proc_scope).extract()
     sgparams.refinement.reflections.outlier.algorithm = 'tukey'
 
     crystal_P1 = copy.deepcopy(experiments[0].crystal)
-
-    # Generate Bravais settings
     try:
-      Lfat = refined_settings_factory_from_refined_triclinic(sgparams,
-                                                             experiments,
-                                                             reflections,
-                                                             lepage_max_delta=5,
-                                                             refiner_verbosity=10)
+      refined_settings = refined_settings_from_refined_triclinic(
+        experiments=experiments,
+        reflections=reflections,
+        params=sgparams
+      )
+      possible_bravais_settings = {s["bravais"] for s in refined_settings}
+      bravais_lattice_to_space_group_table(possible_bravais_settings)
     except Exception as e:
-      # If refinement fails, reset to P1 (experiments remain modified by Lfat
-      # if there's a refinement failure, which causes issues down the line)
       for expt in experiments:
         expt.crystal = crystal_P1
       return None
 
-    Lfat.labelit_printout()
+    # Generate Bravais settings
+    # try:
+    #   Lfat = refined_settings_factory_from_refined_triclinic(sgparams,
+    #                                                          experiments,
+    #                                                          reflections,
+    #                                                          lepage_max_delta=5)
+    # except Exception as e:
+    #   # If refinement fails, reset to P1 (experiments remain modified by Lfat
+    #   # if there's a refinement failure, which causes issues down the line)
+    #   for expt in experiments:
+    #     expt.crystal = crystal_P1
+    #   return None
+    #
+    # Lfat.labelit_printout()
+    #
+    # # Filter out not-recommended (i.e. too-high rmsd and too-high max angular
+    # # difference) solutions
+    # Lfat_recommended = [s for s in Lfat if s.recommended]
+    #
+    # # If none are recommended, return None (do not reindex)
+    # if len(Lfat_recommended) == 0:
+    #   return None
+    #
+    # # Find the highest symmetry group
+    # possible_bravais_settings = set(solution['bravais'] for solution in
+    #                                 Lfat_recommended)
+    # bravais_lattice_to_space_group_table(possible_bravais_settings)
 
-    # Filter out not-recommended (i.e. too-high rmsd and too-high max angular
-    # difference) solutions
-    Lfat_recommended = [s for s in Lfat if s.recommended]
-
-    # If none are recommended, return None (do not reindex)
-    if len(Lfat_recommended) == 0:
-      return None
-
-    # Find the highest symmetry group
-    possible_bravais_settings = set(solution['bravais'] for solution in
-                                    Lfat_recommended)
-    bravais_lattice_to_space_group_table(possible_bravais_settings)
     lattice_to_sg_number = {
       'aP': 1, 'mP': 3, 'mC': 5, 'oP': 16, 'oC': 20, 'oF': 22, 'oI': 23,
       'tP': 75, 'tI': 79, 'hP': 143, 'hR': 146, 'cP': 195, 'cF': 196, 'cI': 197
@@ -251,7 +280,8 @@ class IOTAImageProcessor(Processor):
         filtered_lattices[key] = value
 
     highest_sym_lattice = max(filtered_lattices, key=filtered_lattices.get)
-    highest_sym_solutions = [s for s in Lfat if s['bravais'] == highest_sym_lattice]
+    highest_sym_solutions = [s for s in refined_settings
+                             if s['bravais'] == highest_sym_lattice]
     if len(highest_sym_solutions) > 1:
       highest_sym_solution = sorted(highest_sym_solutions,
                                     key=lambda x: x['max_angular_difference'])[0]
@@ -334,41 +364,40 @@ class IOTAImageProcessor(Processor):
     img_object.log_info.append(log_entry)
 
     # Write log entry into log file
-    if self.write_logs and output:
-      with open(img_object.int_log, 'w') as tf:
-        for o in output:
-          tf.write('\n{}'.format(o))
+    output.append(error_message)
+    if self.write_logs:
+      self.write_int_log(path=img_object.int_log, output=output,
+                         log_entry=log_entry)
 
     return img_object
 
   def process(self, img_object):
-
-    # write out DIALS info
-    pfx = os.path.splitext(img_object.obj_file)[0]
-    self.params.output.experiments_filename = pfx + '_experiments.json'
-    self.params.output.indexed_filename = pfx + '_indexed.pickle'
-    self.params.output.strong_filename = pfx + '_strong.pickle'
-    self.params.output.refined_experiments_filename = pfx + '_refined_experiments.json'
-    self.params.output.integrated_experiments_filename = pfx + '_integrated_experiments.json'
-    self.params.output.integrated_filename = pfx + '_integrated.pickle'
+    # write out DIALS info (tied to self.write_pickle)
+    if self.write_pickle:
+      self.params.output.indexed_filename = img_object.ridx_path
+      self.params.output.strong_filename = img_object.rspf_path
+      self.params.output.refined_experiments_filename = img_object.eref_path
+      self.params.output.integrated_experiments_filename = img_object.eint_path
+      self.params.output.integrated_filename = img_object.rint_path
 
     # Set up integration pickle path and logfile
-    self.params.verbosity = 10
     self.params.output.integration_pickle = img_object.int_file
     self.int_log = img_object.int_log
+
+    # configure DIALS logging
+    self.dials_log = getattr(img_object, 'dials_log', None)
+    if self.dials_log:
+      log.config(verbosity=1, logfile=self.dials_log)
 
     # Create output folder if one does not exist
     if self.write_pickle:
       if not os.path.isdir(img_object.int_path):
         os.makedirs(img_object.int_path)
 
-    if not img_object.experiments:
-      from dxtbx.model.experiment_list import ExperimentListFactory as exp
-      img_object.experiments = exp.from_filenames([img_object.img_path])[0]
-
     # Auto-set threshold and gain (not saved for target.phil)
     if self.iparams.cctbx_xfel.auto_threshold:
-      threshold = int(img_object.center_int)
+      center_int = img_object.center_int if img_object.center_int else 0
+      threshold = int(center_int)
       self.params.spotfinder.threshold.dispersion.global_threshold = threshold
     if self.iparams.image_import.estimate_gain:
       self.params.spotfinder.threshold.dispersion.gain = img_object.gain
@@ -398,21 +427,29 @@ class IOTAImageProcessor(Processor):
       except Exception as e:
         print ('DEBUG: cannot set detector! ', e)
 
-
-    proc_output = []
+    # Write full params to file (DEBUG)
+    if self.write_logs:
+      param_string = phil_scope.format(python_object=self.params).as_str()
+      full_param_dir = os.path.dirname(self.iparams.cctbx_xfel.target)
+      full_param_fn = 'full_' + os.path.basename(self.iparams.cctbx_xfel.target)
+      full_param_file = os.path.join(full_param_dir, full_param_fn)
+      with open(full_param_file, 'w') as ftarg:
+        ftarg.write(param_string)
 
     # **** SPOTFINDING **** #
     with util.Capturing() as output:
       try:
         print ("{:-^100}\n".format(" SPOTFINDING: "))
+        print ('<--->')
         observed = self.find_spots(img_object.experiments)
         img_object.final['spots'] = len(observed)
-      except Exception as e:
-        return self.error_handler(e, 'spotfinding', img_object, output)
+      except Exception as e_spf:
+        observed = None
       else:
         if (
-                self.iparams.image_import.image_triage and
-                len(observed) >= self.iparams.image_import.minimum_Bragg_peaks
+                self.iparams.data_selection.image_triage and
+                len(observed) >=
+                self.iparams.data_selection.image_triage.minimum_Bragg_peaks
         ):
           msg = " FOUND {} SPOTS - IMAGE ACCEPTED!".format(len(observed))
           print("{:-^100}\n\n".format(msg))
@@ -421,12 +458,21 @@ class IOTAImageProcessor(Processor):
           print("{:-^100}\n\n".format(msg))
           e = 'Insufficient spots found ({})!'.format(len(observed))
           return self.error_handler(e, 'triage', img_object, output)
-    proc_output.extend(output)
+    if not observed:
+      return self.error_handler(e_spf, 'spotfinding', img_object, output)
+
+    if self.write_logs:
+      self.write_int_log(path=img_object.int_log, output=output,
+                         dials_log=self.dials_log)
 
     # Finish if spotfinding is the last processing stage
     if 'spotfind' in self.last_stage:
-      detector = img_object.experiments.unique_detectors()[0]
-      beam = img_object.experiments.unique_beams()[0]
+      try:
+        detector = img_object.experiments.unique_detectors()[0]
+        beam = img_object.experiments.unique_beams()[0]
+      except AttributeError:
+        detector = img_object.experiments.imagesets()[0].get_detector()
+        beam = img_object.experiments.imagesets()[0].get_beam()
 
       s1 = flex.vec3_double()
       for i in range(len(observed)):
@@ -441,10 +487,11 @@ class IOTAImageProcessor(Processor):
     # **** INDEXING **** #
     with util.Capturing() as output:
       try:
-        print ("{:-^100}\n".format(" INDEXING "))
+        print ("{:-^100}\n".format(" INDEXING"))
+        print ('<--->')
         experiments, indexed = self.index(img_object.experiments, observed)
-      except Exception as e:
-        return self.error_handler(e, 'indexing', img_object, output)
+      except Exception as e_idx:
+        indexed = None
       else:
         if indexed:
           img_object.final['indexed'] = len(indexed)
@@ -452,12 +499,20 @@ class IOTAImageProcessor(Processor):
                                      "".format(len(indexed))))
         else:
           img_object.fail = 'failed indexing'
-          return img_object
 
+    if indexed:
+      if self.write_logs:
+        self.write_int_log(path=img_object.int_log, output=output,
+                           dials_log=self.dials_log)
+    else:
+      return self.error_handler(e_idx, 'indexing', img_object, output)
+
+    with util.Capturing() as output:
       # Bravais lattice and reindex
       if self.iparams.cctbx_xfel.determine_sg_and_reindex:
         try:
-          print ("{:-^100}\n".format(" DETERMINING SPACE GROUP "))
+          print ("{:-^100}\n".format(" DETERMINING SPACE GROUP"))
+          print('<--->')
           experiments, indexed = self.pg_and_reindex(indexed, experiments)
           img_object.final['indexed'] = len(indexed)
           lat = experiments[0].crystal.get_space_group().info()
@@ -466,24 +521,50 @@ class IOTAImageProcessor(Processor):
             print ("{:-^100}\n".format(" REINDEXED TO SPACE GROUP {} ".format(sg)))
           else:
             print ("{:-^100}\n".format(" RETAINED TRICLINIC (P1) SYMMETRY "))
-        except Exception as e:
-          return self.error_handler(e, 'indexing', img_object, output)
-    proc_output.extend(output)
+          reindex_success = True
+        except Exception as e_ridx:
+          reindex_success = False
+
+        if reindex_success:
+          if self.write_logs:
+            self.write_int_log(path=img_object.int_log, output=output,
+                               dials_log=self.dials_log)
+        else:
+          return self.error_handler(e_ridx, 'indexing', img_object, output)
+
+    # **** REFINEMENT **** #
+    with util.Capturing() as output:
+      try:
+        experiments, indexed = self.refine(experiments, indexed)
+        refined = True
+      except Exception as e_ref:
+        refined = False
+    if refined:
+      if self.write_logs:
+        self.write_int_log(path=img_object.int_log, output=output,
+                           dials_log=self.dials_log)
+    else:
+      return self.error_handler(e_ref, 'refinement', img_object, output)
 
     # **** INTEGRATION **** #
     with util.Capturing() as output:
       try:
-        experiments, indexed = self.refine(experiments, indexed)
         print ("{:-^100}\n".format(" INTEGRATING "))
+        print ('<--->')
         integrated = self.integrate(experiments, indexed)
-      except Exception as e:
-        return self.error_handler(e, 'integration', img_object, output)
+      except Exception as e_int:
+        integrated = None
       else:
         if integrated:
           img_object.final['integrated'] = len(integrated)
           print ("{:-^100}\n\n".format(" FINAL {} INTEGRATED REFLECTIONS "
-                                      "".format(len(integrated))))
-    proc_output.extend(output)
+                                       "".format(len(integrated))))
+    if integrated:
+      if self.write_logs:
+        self.write_int_log(path=img_object.int_log, output=output,
+                           dials_log=self.dials_log)
+    else:
+      return self.error_handler(e_int, 'integration', img_object, output)
 
     # Filter
     if self.iparams.cctbx_xfel.filter.flag_on:
@@ -496,7 +577,7 @@ class IOTAImageProcessor(Processor):
                                min_res=self.iparams.cctbx_xfel.filter.min_resolution)
       fail, e = self.selector.result_filter()
       if fail:
-        return self.error_handler(e, 'filter', img_object, proc_output)
+        return self.error_handler(e, 'filter', img_object, output)
 
     int_results, log_entry = self.collect_information(img_object=img_object)
 
@@ -508,13 +589,37 @@ class IOTAImageProcessor(Processor):
     img_object.log_info.append(log_entry)
 
     if self.write_logs:
-      with open(img_object.int_log, 'w') as tf:
-        for i in proc_output:
-          if 'cxi_version' not in i:
-            tf.write('\n{}'.format(i))
-        tf.write('\n{}'.format(log_entry))
-
+      self.write_int_log(path=img_object.int_log, log_entry=log_entry)
     return img_object
+
+  def write_int_log(self, path, output=None, log_entry=None, dials_log=None):
+    if output:
+      output = [i for i in output if 'cxi_version' not in i]
+      output_string = '\n'.join(output)
+    else:
+      output_string = ''
+    # insert DIALS logging output
+    if dials_log is not None:
+      with open(dials_log, 'r') as dlog:
+        dlog.seek(self.dlog_bookmark)
+        dials_log_lines = ['  {}'.format(l) for l in dlog.readlines()]
+        dials_log_string = ''.join(dials_log_lines)
+        self.dlog_bookmark = dlog.tell()
+      output_string = output_string.replace('<--->', dials_log_string)
+
+    # Add IOTA log entry if exists
+    if log_entry:
+      output_string += log_entry
+
+    # Write log to file
+    with open(path, 'a') as tf:
+      tf.write(output_string)
+      # for i in output:
+      #   if 'cxi_version' not in i:
+      #     tf.write('\n{}'.format(i))
+      # if log_entry:
+      #   tf.write('\n{}'.format(log_entry))
+
 
   def collect_information(self, img_object):
     # Collect information
@@ -528,7 +633,7 @@ class IOTAImageProcessor(Processor):
     sigmas = obs.sigmas()
     I_over_sigI = Is / sigmas
     strong_spots = len([i for i in I_over_sigI if
-                        i >= self.iparams.image_import.strong_sigma])
+                        i >= self.iparams.data_selection.image_triage.strong_sigma])
 
     # Mosaicity parameters
     mosaicity = round((self.frame.get('ML_half_mosaicity_deg', [0])[0]), 6)

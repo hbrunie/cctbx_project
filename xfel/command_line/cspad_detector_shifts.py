@@ -13,6 +13,7 @@
 #
 from __future__ import absolute_import, division, print_function
 from six.moves import range
+from dials.util import show_mail_on_error
 from scitbx.array_family import flex
 from scitbx.matrix import col
 from libtbx.phil import parse
@@ -26,7 +27,7 @@ help_message = '''
 This program is used to show differences between a reference and a moving set of detectors
 Example:
 
-  %s experiment1.json experiment2.json reflections1.pickle reflections2.pickle
+  %s experiment1.expt experiment2.expt reflections1.refl reflections2.refl
 ''' % libtbx.env.dispatcher_name
 
 # Create the phil parameters
@@ -48,7 +49,7 @@ class Script(ParentScript):
     import libtbx.load_env
 
     # Create the option parser
-    usage = "usage: %s experiment1.json experiment2.json reflections1.pickle reflections2.pickle" % libtbx.env.dispatcher_name
+    usage = "usage: %s experiment1.expt experiment2.expt reflections1.refl reflections2.refl" % libtbx.env.dispatcher_name
     self.parser = OptionParser(
       usage=usage,
       sort_options=True,
@@ -295,9 +296,6 @@ Rot Z: rotation around detector normal in lab space
 """)
 
 if __name__ == '__main__':
-  from dials.util import halraiser
-  try:
+  with show_mail_on_error():
     script = Script()
     script.run()
-  except Exception as e:
-    halraiser(e)

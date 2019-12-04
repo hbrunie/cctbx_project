@@ -113,6 +113,8 @@ general_tests = [
   "$D/monomer_library/tst_geo_reduce_for_tardy.py",
   "$D/monomer_library/tst_chg.py",
   "$D/monomer_library/tst_neutron_distance.py",
+  '$D/monomer_library/tst_carbo_linking.py',
+  '$D/monomer_library/tst_paral_geo.py',
   #
   "$D/regression/tst_altloc_remediate.py",
   "$D/hydrogens/build_hydrogens.py",
@@ -167,6 +169,8 @@ general_tests = [
   "$D/conformation_dependent_library/tst_cdl_esd.py",
   "$D/conformation_dependent_library/tst_rdl.py",
   "$D/conformation_dependent_library/tst_hpdl.py",
+  "$D/conformation_dependent_library/tst_cis_c_n_ca.py",
+  "$D/conformation_dependent_library/cdl_svl_database.py",
   "$D/conformation_dependent_library/tst_pH_mechanism.py",
   "$D/regression/tst_find_ss_structure.py",
   "$D/regression/tst_fix_rotamer_outliers.py",
@@ -221,6 +225,7 @@ general_tests = [
   "$D/regression/tst_isomorphous_difference_misc.py",
   "$D/regression/tst_dynamics_cli.py",
   "$D/ligands/tst_xtal_screens.py",
+  "$D/ligands/tst_ready_set_utils.py",
   "$D/regression/tst_mtz2map.py",
   # ringer
   "$D/regression/tst_ringer.py",
@@ -291,12 +296,11 @@ general_tests = [
   "$D/monomer_library/tst_correct_hydrogens.py",
   # automatic linking
   "$D/monomer_library/tst_superpose_ideal.py",
+  '$D/monomer_library/tst_iron_sulfur_clusters.py',
   #
-  "$D/ions/tst_pick_ca_svm.py",
   "$D/scaling/tst_plan_sad_experiment.py",
   #
   "$D/regression/tst_models_to_from_chains.py",
-  "$D/regression/tst_helix_sheet_recs_as_pdb_files.py",
   # tNCS
   "$D/regression/tncs/tst_pair.py",
   "$D/regression/tncs/tst_epsfac_and_radius.py",
@@ -363,7 +367,9 @@ general_tests = [
   ]
 
 probe_tests = [
+  "$D/regression/tst_rama_z_01.py",
   "$D/regression/pdb_interpretation/tst_edits.py",
+  "$D/regression/pdb_interpretation/tst_edits_actions.py",
   "$D/regression/tst_add_arrows_on_plot.py",
   "$D/regression/model/tst_model.py",
   "$D/regression/tst_reduce_timeout.py",

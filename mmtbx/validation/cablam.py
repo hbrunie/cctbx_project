@@ -6,6 +6,7 @@ from mmtbx.rotamer.n_dim_table import NDimTable #handles contours
 from libtbx import easy_pickle #NDimTables are stored as pickle files
 import libtbx.load_env
 import os, sys
+from iotbx.pdb.hybrid_36 import hy36decode
 
 #{{{ global constants
 #-------------------------------------------------------------------------------
@@ -460,7 +461,7 @@ class cablam_result(residue):
     resname = self.resname.upper()
     if resname == "GLY": return "gly"
     elif resname == "PRO":
-      if self.measures.omega < 90 and self.measures.omega > -90:
+      if self.measures.omega is not None and self.measures.omega < 90 and self.measures.omega > -90:
         return "cispro"
       else: return "transpro"
     else: return "general"
@@ -822,7 +823,8 @@ class cablamalyze(validation):
         record_start = None
         helix_in_progress = False
         result_ids = list(conf.results.keys())
-        result_ids.sort()
+        #result_ids.sort(key=lambda k: (k[0:2], int(hy36decode(4,k[2:6])), k[6:7])) #this broke for non 2-char segids
+        result_ids.sort(key=lambda k: (conf.results[k].chain_id, int(hy36decode(len(conf.results[k].resseq),conf.results[k].resseq)), conf.results[k].icode))
         for result_id in result_ids:
           result = conf.results[result_id]
           #is it evaluable?
@@ -928,7 +930,7 @@ class cablamalyze(validation):
         continue #go to next chain
       #else, combine results into single list
       result_ids = list(conf.results.keys())
-      result_ids.sort()
+      ###result_ids.sort()
       #for result_id in conf.results:
       for result_id in result_ids:
         result = conf.results[result_id]
@@ -948,6 +950,7 @@ class cablamalyze(validation):
           result.altloc = ''
           #set self.results id
           pass
+    self.results.sort(key=lambda r: (r.chain_id, int(hy36decode(len(r.resseq),r.resseq)), r.icode, r.altloc))
   #-----------------------------------------------------------------------------
   #}}}
 
@@ -1047,13 +1050,13 @@ class cablamalyze(validation):
         correctable_helix_count += is_correctable_helix
         correctable_beta_count += is_correctable_beta
         is_correctable_helix, is_correctable_beta = 0,0
-      if result.scores.cablam < CABLAM_OUTLIER_CUTOFF and is_residue:
+      if result.scores.cablam is not None and result.scores.cablam < CABLAM_OUTLIER_CUTOFF and is_residue:
         is_cablam_outlier    = 1
         if result.feedback.alpha or result.feedback.threeten:
           is_correctable_helix = 1
         elif result.feedback.beta:
           is_correctable_beta = 1
-      if result.scores.cablam < CABLAM_DISFAVORED_CUTOFF and is_residue:
+      if result.scores.cablam is not None and result.scores.cablam < CABLAM_DISFAVORED_CUTOFF and is_residue:
         is_cablam_disfavored = 1
       if result.scores.c_alpha_geom is not None and result.scores.c_alpha_geom < CA_GEOM_CUTOFF:
         is_ca_geom_outlier = 1

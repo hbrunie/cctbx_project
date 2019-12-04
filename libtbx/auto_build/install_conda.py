@@ -22,6 +22,7 @@ import os
 import platform
 import shutil
 import sys
+import time
 import warnings
 
 # Python 2/3 compatibility
@@ -137,6 +138,8 @@ class conda_manager(object):
     environments.txt file in ${HOME}/.conda
   install_miniconda(prefix)
     Downloads and installs the latest version of miniconda3
+  update_conda()
+    Updates the current version of conda
   create_environment(builder, filename, copy)
     Uses the known conda installtion to create an environment
   """
@@ -154,18 +157,23 @@ class conda_manager(object):
       default_format.format(builder='phenix', version=version,
                             platform=conda_platform[platform.system()])),
     'xfel': default_file,
+    'xfellegacy': default_file,
     'labelit': default_file,
-    'dials': default_file,
+    'dials': os.path.join('dials', '.conda-envs',
+      default_format.format(builder='dials', version=version,
+                            platform=conda_platform[platform.system()])),
     'external': default_file,
     'molprobity': default_file,
     'qrefine': default_file,
     'phaser': default_file,
-    'phaser_tng': default_file
+    'phasertng': os.path.join('phaser', 'conda_envs',
+      default_format.format(builder='phaser_tng', version=version,
+                            platform=conda_platform[platform.system()]))
   }
 
   # ---------------------------------------------------------------------------
   def __init__(self, root_dir=root_dir, conda_base=None, conda_env=None,
-               check_file=True, verbose=False, log=sys.stdout):
+               check_file=True, max_retries=5, verbose=False, log=sys.stdout):
     """
     Constructor that performs that basic check for the conda installation.
     If an installation is not found, the latest version can be downloaded
@@ -187,13 +195,17 @@ class conda_manager(object):
       Optional argument for specifying location of a conda environment.
       Since this is assumed to be a working conda environment, a new
       installation of conda will not be created. This is for developers
-      that want to manage their own environments. If a conda environment
-      is active, this will be automatically set to the CONDA_PREFIX
-      environment variable.
+      that want to manage their own environments.
     check_file: bool
       Flag for checking if a file exists. A RuntimeError is raised if a
       this flag is set and a file does not exist. Used in get_conda_exe
       and get_conda_python.
+    max_retries: int
+      When downloading conda packages, there may be network issues that
+      prevent the environment from being constructed. This parameter
+      controls the number of retry attempts for constructing the conda
+      environment. The first retry is attempted 1 minute after the
+      initial failure. The second retry is attempted 2 minutes, etc.
     verbose: bool
       Flag for showing conda output
     log: file
@@ -210,11 +222,9 @@ class conda_manager(object):
     self.conda_env = None
     if conda_env is not None:
       self.conda_env = os.path.normpath(conda_env)
-    env_variable = os.environ.get('CONDA_PREFIX')
-    if env_variable is not None:
-      self.conda_env = env_variable
 
     self.check_file = check_file
+    self.max_retries = max_retries
     self.verbose = verbose
     self.log = log
 
@@ -389,6 +399,8 @@ common compilers provided by conda. Please update your version with
     ----------
     conda_env: str
       The path to the conda environment
+    check_file: bool
+      Used to override the check_file attribute
 
     Returns
     -------
@@ -434,7 +446,7 @@ common compilers provided by conda. Please update your version with
     try:
       with open(self.environment_file) as f:
         paths = f.readlines()
-      for i, env in enumerate(paths):
+      for env in paths:
         env = env.strip()
         if os.path.isdir(env):
           environments.add(os.path.normpath(env))
@@ -503,19 +515,48 @@ common compilers provided by conda. Please update your version with
     # run the installer
     install_dir = os.path.join(prefix, 'mc3')
     if self.system == 'Windows':
-      flags = '/InstallationType=JustMe /RegisterPython=0 /AddToPath=0 /S /D={install_dir}'.\
+      flags = '/InstallationType=JustMe /RegisterPython=0 /AddToPath=0 /S /D="{install_dir}"'.\
         format(install_dir=install_dir)
       command_list = ['"' + filename + '"', flags]
     else:
-      flags = '-b -u -p {install_dir}'.format(install_dir=install_dir)
+      flags = '-b -u -p "{install_dir}"'.format(install_dir=install_dir)
       command_list = ['/bin/sh', filename, flags]
-    print('Installing miniconda to {install_dir}'.format(
+    print('Installing miniconda to "{install_dir}"'.format(
       install_dir=install_dir), file=self.log)
     output = check_output(command_list, env=self.env)
     if self.verbose:
       print(output, file=self.log)
 
     return install_dir
+
+  # ---------------------------------------------------------------------------
+  def update_conda(self):
+    """
+    Update the version of conda, if possible. The defaults channel is
+    used because that is the default for a normal miniconda installation.
+
+    Parameters
+    ----------
+      None
+    """
+    command_list = [self.conda_exe, 'update', '-n', 'base', '-c', 'defaults',
+                    '-y', 'conda']
+    try:
+      output = check_output(command_list, env=self.env)
+    except Exception:
+      print("""
+*******************************************************************************
+There was a failure in updating your base conda installaion. To update
+manually, try running
+
+  conda update -n base -c defaults conda
+
+If you are using conda from a different channel, replace "defaults" with that
+channel
+*******************************************************************************
+""")
+    else:
+      print(output)
 
   # ---------------------------------------------------------------------------
   def create_environment(self, builder='cctbx', filename=None, python=None,
@@ -569,6 +610,10 @@ format(builder=builder, builders=', '.join(sorted(self.env_locations.keys()))))
       raise RuntimeError("""The file, {filename}, is not available""".\
                          format(filename=filename))
 
+    yaml_format = False
+    if filename.endswith('yml') or filename.endswith('yaml'):
+      yaml_format = True
+
     # make a new environment directory
     if self.conda_env is None:
       name = 'conda_base'
@@ -580,24 +625,48 @@ format(builder=builder, builders=', '.join(sorted(self.env_locations.keys()))))
     # install a new environment or update and existing one
     if prefix in self.environments:
       command = 'install'
+      if yaml_format:
+        command = 'update'
       text_messages = ['Updating', 'update of']
     else:
       command = 'create'
       text_messages = ['Installing', 'installation into']
     command_list = [self.conda_exe, command, '--prefix', prefix,
                     '--file', filename]
+    if yaml_format:
+      command_list.insert(1, 'env')
     if self.system == 'Windows':
       command_list = [os.path.join(self.conda_base, 'Scripts', 'activate'),
                       'base', '&&'] + command_list
-    if copy:
+    if copy and not yaml_format:
       command_list.append('--copy')
-    if offline:
+    if offline and not yaml_format:
       command_list.append('--offline')
+    if builder == "dials":
+      command_list.append("-y")
     # RuntimeError is raised on failure
     print('{text} {builder} environment with:\n  {filename}'.format(
           text=text_messages[0], builder=builder, filename=filename),
           file=self.log)
-    output = check_output(command_list, env=self.env)
+    for retry in range(self.max_retries):
+      retry += 1
+      try:
+        output = check_output(command_list, env=self.env)
+      except Exception:
+        print("""
+*******************************************************************************
+There was a failure in constructing the conda environment.
+Attempt {retry} of {max_retries} will start {retry} minute(s) from {t}.
+*******************************************************************************
+""".format(retry=retry, max_retries=self.max_retries, t=time.asctime()))
+        time.sleep(retry*60)
+      else:
+        break
+    if retry == self.max_retries:
+      raise RuntimeError("""
+The conda environment could not be constructed. Please check that there is a
+working network connection for downloading conda packages.
+""")
     if self.verbose:
       print(output, file=self.log)
     print('Completed {text}:\n  {prefix}'.format(text=text_messages[1],
@@ -647,12 +716,6 @@ Example usage:
   {prog} --conda_env=<path> --builder=<builder>
     Update conda environment for builder
 
-  In an active conda environment, the last example can just be
-
-    {prog} --builder=<builder>
-
-  because $CONDA_PREFIX is known.
-
 """.format(prog=prog)
 
   parser = argparse.ArgumentParser(
@@ -675,6 +738,12 @@ Example usage:
     help="""When set, conda will be automatically downloaded and installed
       regardless of an existing installation.""")
   parser.add_argument(
+    '--update_conda', action='store_true',
+    help="""When set, conda will try to update itself to the latest version.
+      This should only be used if your conda installation was installed by
+      this script or if your conda is writeable and uses the "defaults"
+      channel""")
+  parser.add_argument(
     '--install_env', default=None, type=str, nargs='?', const='',
     metavar='ENV_FILE',
     help="""When set, the environment for the builder will be installed. The
@@ -691,9 +760,8 @@ Example usage:
     '--conda_env', default=None, type=str, metavar='ENV_DIRECTORY',
     help="""The location of the conda environment for building. This is useful
       for when the exact conda environment is known. Providing the path will
-      ensure that that environment is used. Also, if a conda environment
-      is currently active, the CONDA_PREFIX environment variable will be
-      used as this location.""")
+      ensure that that environment is used. Using $CONDA_PREFIX as the
+      argument will use the currently active environment for building.""")
   parser.add_argument(
     '--copy', action='store_true', default=False,
     help="""When set, the new environment has copies, not links to files. This
@@ -732,14 +800,21 @@ Example usage:
                     conda_env=namespace.conda_env, check_file=True,
                     verbose=namespace.verbose)
 
+  # if --update_conda is set, try to update now
+  if namespace.update_conda:
+    m.update_conda()
+
+  # if builder is available, construct environment
   if builder is not None:
     m.create_environment(builder=builder, filename=filename,
                          python=namespace.python,
                          copy=namespace.copy, offline=namespace.offline)
 
+  return 0
+
 # =============================================================================
 if __name__ == '__main__':
-  run()
+  sys.exit(run())
 
 # =============================================================================
 # end

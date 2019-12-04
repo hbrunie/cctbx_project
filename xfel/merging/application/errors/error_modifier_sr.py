@@ -5,6 +5,9 @@ from xfel.merging.application.reflection_table_utils import reflection_table_uti
 
 class error_modifier_sr(worker):
 
+  def __init__(self, params, mpi_helper=None, mpi_logger=None):
+    super(error_modifier_sr, self).__init__(params=params, mpi_helper=mpi_helper, mpi_logger=mpi_logger)
+
   def __repr__(self):
     return 'Adjust intensity errors -- sample residuals method'
 
@@ -24,10 +27,12 @@ class error_modifier_sr(worker):
     new_reflections = flex.reflection_table()
     number_of_hkls = 0
     number_of_multiply_measured_hkls = 0
+
     for refls in reflection_table_utils.get_next_hkl_reflection_table(reflections):
+      if refls.size() == 0:
+        break # unless the input "reflections" list is empty, generated "refls" lists cannot be empty
       number_of_hkls += 1
       number_of_measurements = len(refls)
-      assert number_of_measurements > 0
       if number_of_measurements > 1:
         stats = flex.mean_and_variance(refls['intensity.sum.value'])
         refls['intensity.sum.variance'] = flex.double(number_of_measurements, stats.unweighted_sample_variance())

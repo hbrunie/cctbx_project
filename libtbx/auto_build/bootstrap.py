@@ -46,6 +46,8 @@ need to install it separately. On CentOS 6, you can run
 with administrative privileges.
 """)
 
+_BUILD_DIR = "build"  # set by arg parser further on down
+
 windows_remove_list = []
 
 rosetta_version_tar_bundle='rosetta_src_2018.33.60351_bundle'
@@ -86,7 +88,7 @@ def tar_extract(workdir, archive, modulename=None):
     for root, dirs, files in os.walk(module):
       for fname in files:
         full_path = os.path.join(root, fname)
-        os.chmod(full_path, stat.S_IREAD | stat.S_IWRITE)
+        os.chmod(full_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IRGRP | stat.S_IROTH)
     # rename to expected folder name, e.g. boost_hot -> boost
     # only rename if folder names differ
     if modulename:
@@ -112,7 +114,7 @@ class ShellCommand(object):
     return None
 
   def get_workdir(self):
-    return self.kwargs.get('workdir', 'build')
+    return self.kwargs.get('workdir', _BUILD_DIR)
 
   def get_environment(self):
     # gets environment from kwargs
@@ -295,10 +297,13 @@ class Toolbox(object):
       # if url fails to open, try using curl
       # temporary fix for old OpenSSL in system Python on macOS
       # https://github.com/cctbx/cctbx_project/issues/33
-      command = ['/usr/bin/curl', '--http1.0', '-Lo', file, '--retry', '5', url]
+      command = ['/usr/bin/curl', '--http1.0', '-fLo', file, '--retry', '5', url]
       subprocess.call(command, shell=False)
       socket = None     # prevent later socket code from being run
-      received = 1      # satisfy (filesize > 0) checks later on
+      try:
+        received = os.path.getsize(file)
+      except OSError:
+        raise RuntimeError("Download failed")
 
     if (socket is not None):
       try:
@@ -412,7 +417,7 @@ class Toolbox(object):
         except Exception: pass
         if not is_directory:
           source = z.open(member)
-          target = file(filename, "wb")
+          target = open(filename, "wb")
           shutil.copyfileobj(source, target)
           target.close()
           source.close()
@@ -682,19 +687,28 @@ class SourceModule(object):
 # On Windows due to absence of rsync we use pscp from the Putty programs.
 class ccp4io_module(SourceModule):
   module = 'ccp4io'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/ccp4io.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/ccp4io.gz',
+    'https://drive.google.com/uc?id=1EF6AqowSrVnse7pRtRmIsvhS6Q0dsSLT&export=download',
+  ]]
   authentarfile = ['%(cciuser)s@cci.lbl.gov', 'ccp4io.tar.gz', '/net/cci/auto_build/repositories/ccp4io']
   authenticated = ['rsync', '%(cciuser)s@cci.lbl.gov:/net/cci/auto_build/repositories/ccp4io/']
 
 class annlib_module(SourceModule):
   module = 'annlib'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/annlib.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/annlib.gz',
+    'https://drive.google.com/uc?id=1YD_KDXrfhJ5ryT97j4yxmbAPoecGLjg0&export=download',
+  ]]
   authentarfile = ['%(cciuser)s@cci.lbl.gov', 'annlib.tar.gz', '/net/cci/auto_build/repositories/annlib']
   authenticated = ['rsync', '%(cciuser)s@cci.lbl.gov:/net/cci/auto_build/repositories/annlib/']
 
 class scons_module(SourceModule):
   module = 'scons'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/scons.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/scons.gz',
+    'https://drive.google.com/uc?id=1hPd5cMbVcsN4j0P5qaPUV71XS_aifw-J&export=download',
+  ]]
   authentarfile = ['%(cciuser)s@cci.lbl.gov', 'scons.tar.gz', '/net/cci/auto_build/repositories/scons']
   authenticated = ['rsync', '%(cciuser)s@cci.lbl.gov:/net/cci/auto_build/repositories/scons/']
 
@@ -729,14 +743,18 @@ class cctbx_module(SourceModule):
                'https://github.com/cctbx/cctbx_project.git',
                'https://github.com/cctbx/cctbx_project/archive/master.zip']
 
+class amber_adaptbx_module(SourceModule):
+  module = 'amber_adaptbx'
+  anonymous = ['git',
+               'git@github.com:phenix-project/amber_adaptbx.git',
+               'https://github.com/phenix-project/amber_adaptbx.git',
+               ]
+
 class qrefine_module(SourceModule):
   module = 'qrefine'
   anonymous = ['git',
                'git@github.com:qrefine/qrefine.git',
                'https://github.com/qrefine/qrefine.git',
-               #'git@github.com:cctbx/cctbx_project.git',
-               #'https://github.com/cctbx/cctbx_project.git',
-               #'https://github.com/cctbx/cctbx_project/archive/master.zip']
                ]
 
 class mon_lib_module(SourceModule):
@@ -768,7 +786,10 @@ class cbflib_module(SourceModule):
 
 class ccp4io_adaptbx(SourceModule):
   module = 'ccp4io_adaptbx'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/ccp4io_adaptbx.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/ccp4io_adaptbx.gz',
+    'https://drive.google.com/uc?id=1X5kRE90KkV2yTEyF9zb-PHOjjRXjzYvx&export=download',
+    ]]
   authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/ccp4io_adaptbx/trunk']
 
 class annlib_adaptbx(SourceModule):
@@ -780,17 +801,26 @@ class annlib_adaptbx(SourceModule):
 
 class tntbx_module(SourceModule):
   module = 'tntbx'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/tntbx.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/tntbx.gz',
+    'https://drive.google.com/uc?id=1bDE_rF6iL0SeyplHSTNsfJyI1G1h7ZZv&export=download',
+    ]]
   authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/tntbx/trunk']
 
 class clipper_module(SourceModule):
   module = 'clipper'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/clipper.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/clipper.gz',
+    'https://drive.google.com/uc?id=1xWAj59zoyVn26EoIuBrw7KLNRyGjS5wC&export=download',
+    ]]
   authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/clipper/trunk']
 
 class gui_resources_module(SourceModule):
   module = 'gui_resources'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/gui_resources.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/gui_resources.gz',
+    'https://drive.google.com/uc?id=1TTibOePamkUiIvwDJF-OMmdgX8jdgNUS&export=download',
+  ]]
   authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/gui_resources/trunk']
 
 class opt_resources_module(SourceModule):
@@ -799,7 +829,10 @@ class opt_resources_module(SourceModule):
 
 class eigen_module(SourceModule):
   module = 'eigen'
-  anonymous = ['curl', 'http://cci.lbl.gov/repositories/eigen.gz']
+  anonymous = ['curl', [
+    'http://cci.lbl.gov/repositories/eigen.gz',
+    'https://drive.google.com/uc?id=138kErrF35WbnRRARqUczWaroao2w8p1A&export=download',
+  ]]
   authentarfile = ['%(cciuser)s@cci.lbl.gov', 'eigen.tar.gz', '/net/cci/auto_build/repositories/eigen']
   authenticated = ['rsync', '%(cciuser)s@cci.lbl.gov:/net/cci/auto_build/repositories/eigen/']
 
@@ -836,10 +869,6 @@ class elbow_module(SourceModule):
   module = 'elbow'
   authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/elbow/trunk']
 
-class amber_adaptbx_module(SourceModule):
-  module = 'amber_adaptbx'
-  authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/amber_adaptbx/trunk']
-
 class ksdssp_module(SourceModule):
   module = 'ksdssp'
   authenticated = ['svn', 'svn+ssh://%(cciuser)s@cci.lbl.gov/ksdssp/trunk']
@@ -875,11 +904,11 @@ class phaser_module(SourceModule):
                'git://git.uis.cam.ac.uk/cimr-phaser/phaser.git',
                'https://git.uis.cam.ac.uk/cimr-phaser/phaser.git']
 
-class phaser_tng_module(SourceModule):
-  module = 'phaser_tng'
+class phasertng_module(SourceModule):
+  module = 'phasertng'
   anonymous = ['git',
-               'git://git.uis.cam.ac.uk/cimr-phaser/phaser_tng.git',
-               'https://git.uis.cam.ac.uk/cimr-phaser/phaser_tng.git']
+               'git://git.uis.cam.ac.uk/cimr-phaser/phasertng.git',
+               'https://git.uis.cam.ac.uk/cimr-phaser/phasertng.git']
 
 class phaser_regression_module(SourceModule):
   module = 'phaser_regression'
@@ -917,7 +946,11 @@ class dials_regression_module(SourceModule):
 
 class msgpack_module(SourceModule):
   module = 'msgpack'
-  anonymous = ['curl', "https://gitcdn.xyz/repo/dials/dependencies/dials-1.13/msgpack-3.1.1.tar.gz"]
+  anonymous = ['curl', [
+    "https://gitcdn.xyz/repo/dials/dependencies/dials-1.13/msgpack-3.1.1.tar.gz",
+    "https://gitcdn.link/repo/dials/dependencies/dials-1.13/msgpack-3.1.1.tar.gz",
+    "https://github.com/dials/dependencies/raw/dials-1.13/msgpack-3.1.1.tar.gz",
+  ]]
 
 class xfel_regression_module(SourceModule):
   module = 'xfel_regression'
@@ -952,6 +985,19 @@ class king_module(SourceModule):
 class molprobity_moodule(SourceModule):
   module = 'molprobity'
   anonymous = ['svn', 'https://github.com/rlabduke/MolProbity.git/trunk']
+
+class uc_metrics_module(SourceModule):
+  module = 'uc_metrics'
+  anonymous = ['git',
+               'git@gitlab.com:cctbx/uc_metrics.git',
+               'https://gitlab.com/cctbx/uc_metrics.git']
+
+class ncdist_module(SourceModule):
+  module = 'ncdist'
+  anonymous = ['git',
+               'git@github.com:yayahjb/ncdist.git',
+               'https://github.com/yayahjb/ncdist.git',
+               'https://github.com/yayahjb/ncdist/archive/master.zip']
 
 MODULES = SourceModule()
 
@@ -1050,7 +1096,7 @@ class Builder(object):
 
     # Cleanup
     if cleanup:
-      self.cleanup(['dist', 'tests', 'doc', 'tmp', 'base', 'base_tmp', 'build',
+      self.cleanup(['dist', 'tests', 'doc', 'tmp', 'base', 'base_tmp', _BUILD_DIR,
                     'conda_base'])
     else:
       self.cleanup(['dist', 'tests', 'tmp'])
@@ -1336,14 +1382,32 @@ class Builder(object):
     ))
 
   def _add_download(self, url, to_file):
+    if not isinstance(url, list):
+      url = [url]
     class _download(object):
       def run(self):
-        print("===== Downloading %s: " % url, end=' ')
-        Toolbox().download_to_file(url, to_file)
+        for _url in url:
+          for retry in (3,3,0):
+            print("===== Downloading %s: " % _url, end=' ')
+            try:
+              Toolbox().download_to_file(_url, to_file)
+              return
+            except Exception as e:
+              print("Download failed with", e)
+              if retry:
+                print("Retrying in %d seconds" % retry)
+                time.sleep(retry)
+        raise RuntimeError("Could not download " + to_file)
     self.add_step(_download())
 
   def _add_curl(self, module, url):
-    filename = urlparse(url)[2].split('/')[-1]
+    if isinstance(url, list):
+      filename = urlparse(url[0])[2].split('/')[-1]
+    else:
+      filename = urlparse(url)[2].split('/')[-1]
+    # Google Drive URL does not contain the module name
+    if filename == 'uc':
+      filename = module + '.gz'
     self._add_download(url, os.path.join('modules', filename))
     self.add_step(self.shell(
       name="extracting files from %s" %filename,
@@ -1433,31 +1497,23 @@ class Builder(object):
     else:
       from .install_conda import conda_manager
 
-    # check for active conda environment
-    conda_env = os.environ.get('CONDA_PREFIX')
-
     # drop output
     log = open(os.devnull, 'w')
 
-    # no path provided
-    if self.use_conda == '' and conda_env is None:
-      conda_env = os.path.join('..', 'conda_base')
-      if self.isPlatformWindows():
-        conda_env = os.path.join(os.getcwd(), 'conda_base')
-      # base step is not run yet, so do not check if files exist
-      m = conda_manager(root_dir=os.getcwd(), conda_env=conda_env,
-                        check_file=False, log=log)
-    else:
-      # conda environment is active, overrides any path provided to --use-conda
-      if conda_env is not None:
-        self.use_conda = conda_env
-      # check that directory exists
-      if not os.path.isdir(self.use_conda):
-        raise RuntimeError('The path provided to --use-conda does not exist.')
-      # basic checks for python and conda
+    # environment is provided, so do check that it exists
+    if os.path.isdir(self.use_conda):
+      check_file = True
       self.use_conda = os.path.abspath(self.use_conda)
-      m = conda_manager(root_dir=os.getcwd(), conda_env=self.use_conda,
-                        check_file=True, log=log)
+    # no path provided or file provided
+    else:
+      check_file = False
+      # base step has not run yet, so do not check if files exist
+      self.use_conda = os.path.join('..', 'conda_base')
+      if self.isPlatformWindows():
+        self.use_conda = os.path.join(os.getcwd(), 'conda_base')
+    # basic checks for python and conda
+    m = conda_manager(root_dir=os.getcwd(), conda_env=self.use_conda,
+                      check_file=check_file, log=log)
 
     return m
 
@@ -1486,33 +1542,24 @@ class Builder(object):
 
       conda_python = None
 
-      # check for active conda environment
-      conda_env = os.environ.get('CONDA_PREFIX')
-
       # (case 1)
-      if self.use_conda == '' and conda_env is None:
+      # use default location or file provided to --use-conda
+      if self.use_conda == '' or os.path.isfile(self.use_conda):
         conda_python = self.op.join('..', 'conda_base',
                                     m_get_conda_python(self))
+        if self.isPlatformWindows():
+          conda_python = self.op.join(os.getcwd(), 'conda_base', m_get_conda_python(self))
       # (case 2)
-      # conda environment is active, overrides any path provided to --use-conda
-      elif conda_env is not None:
-        if os.path.isdir(conda_env):
-          conda_python = os.path.join(conda_env, m_get_conda_python(self))
-        else:
-          raise RuntimeError("""
-The path specified by the CONDA_PREFIX environment variable does not
-exist. Please make sure you have a valid conda environment in
-{conda_env}""".format(conda_env=conda_env))
       # use path provided to --use-conda
-      else:
+      elif os.path.isdir(self.use_conda):
         self.use_conda = os.path.abspath(self.use_conda)
-        if os.path.isdir(self.use_conda):
-          conda_python = os.path.join(self.use_conda, m_get_conda_python(self))
-        else:
-          raise RuntimeError("""
-The path specified by the --use-conda flag does not exist. Please make
-sure you have a valid conda environment in
-{conda_env}""".format(conda_env=self.use_conda))
+        conda_python = os.path.join(self.use_conda, m_get_conda_python(self))
+      else:
+        raise RuntimeError("""
+The --use-conda flag can accept a directory to a conda environment or a
+file that defines a conda environment. Please make sure a valid conda
+environment exists in or is defined by {conda_env}.
+""".format(conda_env=self.use_conda))
 
       if conda_python is None:
         raise RuntimeError('A conda version of python could not be found.')
@@ -1523,14 +1570,14 @@ sure you have a valid conda environment in
     if self.isPlatformWindows():
       command = command + '.bat'
     # Relative path to workdir.
-    workdir = workdir or ['build']
+    workdir = workdir or [_BUILD_DIR]
     dots = [".."]*len(workdir)
     if workdir[0] == '.':
       dots = []
     if sys.platform == "win32": # assuming we run standalone without buildbot
-      dots.extend([os.getcwd(), 'build', 'bin', command])
+      dots.extend([os.getcwd(), _BUILD_DIR, 'bin', command])
     else:
-      dots.extend(['build', 'bin', command])
+      dots.extend([_BUILD_DIR, 'bin', command])
     self.add_step(self.shell(
       name=name or command,
       command=[self.opjoin(*dots)] + (args or []),
@@ -1619,18 +1666,18 @@ sure you have a valid conda environment in
     #      A path to a conda environment should be provided. No checks are done
     #      on the environment. The environment files for the build should be
     #      used to construct the starting environment and the developer is
-    #      responsible for maintaining it. Also, if a conda environment is
-    #      active, the $CONDA_PREFIX environment variable will be used.
+    #      responsible for maintaining it.
     if self.use_conda is not None:  # --use-conda flag is set
       # reset command
       command = []
 
-      # check for active conda environment
-      conda_env = os.environ.get('CONDA_PREFIX')
-
-      # no path provided (case 1), case 2 handled in _get_conda_python
-      if self.use_conda == '' and conda_env is None:
+      # file or no path provided (case 1), case 2 handled in _get_conda_python
+      if self.use_conda == '' or os.path.isfile(self.use_conda):
         flags = ['--builder={builder}'.format(builder=self.category)]
+        # check if a file was an argument
+        if os.path.isfile(self.use_conda):
+          filename = os.path.abspath(self.use_conda)
+          flags.append('--install_env={filename}'.format(filename=filename))
         # check for existing miniconda3 installation
         if not os.path.isdir('mc3'):
           flags.append('--install_conda')
@@ -1680,16 +1727,11 @@ sure you have a valid conda environment in
       ]
     else:
       # default
-      base_dir = '../conda_base'
+      base_dir = self.op.join('..', 'conda_base')
       # use path from --use-conda flag
       # error-checking done in _get_conda_python function
-      if self.use_conda != '':
+      if os.path.isdir(self.use_conda):
         base_dir = self.use_conda
-      # override with $CONDA_PREFIX
-      # error-checking done in _get_conda_python function
-      conda_env = os.environ.get('CONDA_PREFIX')
-      if conda_env is not None:
-        base_dir = conda_env
 
       dispatcher_opts += [
       "--base_dir=%s" % base_dir,
@@ -1713,7 +1755,7 @@ sure you have a valid conda environment in
         '--prologue=%s' % prologue,
         #"--epilogue=%s"
       ] + dispatcher_opts,
-      workdir=['build']
+      workdir=[_BUILD_DIR]
     ))
 
   def add_configure(self):
@@ -1736,7 +1778,7 @@ sure you have a valid conda environment in
         self.python_base, # default to using our python rather than system python
         self.opjoin('..', 'modules', 'cctbx_project', 'libtbx', 'configure.py')
         ] + self.get_libtbx_configure() + self.config_flags
-    self.add_step(self.shell(command=configcmd, workdir=['build'],
+    self.add_step(self.shell(command=configcmd, workdir=[_BUILD_DIR],
       description="run configure.py", env=env))
     # Prepare saving configure.py command to file should user want to manually recompile Phenix
     fname = self.opjoin("config_modules.cmd")
@@ -1752,12 +1794,12 @@ sure you have a valid conda environment in
     self.add_step(self.shell(command=[
          'python','-c','open(r\"%s\",\"w\").write(r\"\"\"%s\"\"\" + \"\\n\")' %(fname, confstr)
          ],
-      workdir=['build'],
+      workdir=[_BUILD_DIR],
       description="save configure command",
     ))
     if not self.isPlatformWindows():
       self.add_step(self.shell(command=[ 'chmod', '+x', fname ],
-        workdir=['build'],
+        workdir=[_BUILD_DIR],
         description="permit execution of config_modules.sh",
       ))
 
@@ -1846,7 +1888,7 @@ class MOLPROBITYBuilder(Builder):
   ]
   CODEBASES_EXTRA = [
     'molprobity',
-    'chem_data',
+    #'chem_data', #chem_data removed from molprobity builder until accessible outside cci, -CJW
     'reduce',
     'probe',
     'suitename'
@@ -1946,8 +1988,8 @@ class PhaserBuilder(CCIBuilder):
     return configlst
 
 class PhaserTNGBuilder(PhaserBuilder):
-  CODEBASES = PhaserBuilder.CODEBASES + ['phaser_tng']
-  LIBTBX = PhaserBuilder.LIBTBX + ['phaser_tng']
+  CODEBASES = PhaserBuilder.CODEBASES + ['phasertng']
+  LIBTBX = PhaserBuilder.LIBTBX + ['phasertng']
 
   def add_tests(self):
     self.add_test_command('libtbx.import_all_python', workdir=['modules', 'cctbx_project'])
@@ -2023,8 +2065,14 @@ class DIALSBuilder(CCIBuilder):
   LIBTBX_EXTRA = ['dials', 'xia2', 'prime', 'iota', '--skip_phenix_dispatchers']
   HOT_EXTRA = ['msgpack']
   def add_tests(self):
-    self.add_test_command('cctbx_regression.test_nightly')
-    self.add_test_parallel('dials', flunkOnFailure=False, warnOnFailure=True)
+    self.add_test_command('libtbx.pytest',
+                          args=['--regression', '-n', 'auto'],
+                          workdir=['modules', 'dxtbx'],
+                          haltOnFailure=True)
+    self.add_test_command('libtbx.pytest',
+                          args=['--regression', '-n', 'auto'],
+                          workdir=['modules', 'dials'],
+                          haltOnFailure=True)
 
   def add_base(self, extra_opts=[]):
     super(DIALSBuilder, self).add_base(
@@ -2054,7 +2102,7 @@ class LABELITBuilder(CCIBuilder):
   def rebuild_docs(self):
     pass
 
-class XFELBuilder(CCIBuilder):
+class XFELLegacyBuilder(CCIBuilder):
   CODEBASES_EXTRA = [
     'dials',
     'labelit',
@@ -2071,11 +2119,40 @@ class XFELBuilder(CCIBuilder):
   HOT_EXTRA = ['msgpack']
 
   def add_base(self, extra_opts=[]):
-    super(XFELBuilder, self).add_base(
+    super(XFELLegacyBuilder, self).add_base(
       extra_opts=['--labelit', '--dials'] + extra_opts)
 
   def add_tests(self):
     self.add_test_command('cctbx_regression.test_nightly')
+
+  def add_dispatchers(self):
+    pass
+
+  def rebuild_docs(self):
+    pass
+
+class XFELBuilder(CCIBuilder):
+  CODEBASES_EXTRA = [
+    'dials',
+    'uc_metrics',
+    'ncdist',
+  ]
+  LIBTBX_EXTRA = [
+    'dials',
+    'xfel',
+    'prime',
+    'iota',
+    'uc_metrics',
+  ]
+  HOT_EXTRA = ['msgpack']
+
+  def add_base(self, extra_opts=[]):
+    super(XFELBuilder, self).add_base(
+      extra_opts=['--dials'] + extra_opts)
+
+  def add_tests(self):
+    self.add_test_command('cctbx_regression.test_nightly')
+    self.add_test_parallel(module='uc_metrics')
 
   def add_dispatchers(self):
     pass
@@ -2197,7 +2274,7 @@ class PhenixExternalRegression(PhenixBuilder):
     lt = time.localtime()
     cleaning = ['dist', 'tests', 'doc', 'tmp', 'base_tmp']
     if lt.tm_wday==5: # do a completer build on Saturday night
-      cleaning += ['base', 'base_tmp', 'build', 'conda_base']
+      cleaning += ['base', 'base_tmp', _BUILD_DIR, 'conda_base']
     # Preparation
     # AFITT
     if self.subcategory in [None, "afitt"]:
@@ -2236,7 +2313,7 @@ class PhenixExternalRegression(PhenixBuilder):
       '-c',
       'import os; open("%s","w").write("""%s""" %% os.environ)' %(fname, outl)
       ],
-      workdir=['build'],
+      workdir=[_BUILD_DIR],
       description="save csh external paths",
     ))
     outl = ""
@@ -2249,7 +2326,7 @@ class PhenixExternalRegression(PhenixBuilder):
       '-c',
       'import os; open("%s","w").write("""%s""" %% os.environ)' %(fname, outl)
       ],
-      workdir=['build'],
+      workdir=[_BUILD_DIR],
       description="save sh external paths",
     ))
 
@@ -2367,7 +2444,13 @@ class QRBuilder(PhenixBuilder):
 
   def add_make(self):
     if self.user=='builder': PhenixBuilder.add_make(self)
-    pip_installs = ['ase', 'JPype1','pymongo']
+    #
+    # XXX Use older ASE (the new one is only Python3)
+    # XXX Do not get JPype1 as it fails. This makes QR work only with
+    # XXX fast_interaction=True (=False won't work)
+    #
+    #pip_installs = ['ase', 'JPype1','pymongo']
+    pip_installs = ['ase==3.17.0', 'pymongo']
     instructions = []
     # versioning
     cmd = [os.path.join('..', self.python_base),
@@ -2438,10 +2521,10 @@ class QRBuilder(PhenixBuilder):
 
 class PhenixTNGBuilder(PhenixBuilder):
   '''
-  Phenix with phaser_tng and c++11
+  Phenix with phasertng and c++11
   '''
-  CODEBASES = PhenixBuilder.CODEBASES + ['phaser_tng']
-  LIBTBX = PhenixBuilder.CODEBASES + ['phaser_tng']
+  CODEBASES = PhenixBuilder.CODEBASES + ['phasertng']
+  LIBTBX = PhenixBuilder.LIBTBX + ['phasertng']
 
   def get_libtbx_configure(self):
     configlst = super(PhenixTNGBuilder, self).get_libtbx_configure()
@@ -2454,6 +2537,7 @@ def run(root=None):
     'cctbx': CCTBXBuilder,
     'phenix': PhenixBuilder,
     'phenix_tng': PhenixTNGBuilder,
+    'xfellegacy': XFELLegacyBuilder,
     'xfel': XFELBuilder,
     'labelit': LABELITBuilder,
     'dials': DIALSBuilder,
@@ -2461,7 +2545,7 @@ def run(root=None):
     'molprobity':MOLPROBITYBuilder,
     'qrefine': QRBuilder,
     'phaser': PhaserBuilder,
-    'phaser_tng': PhaserTNGBuilder
+    'phasertng': PhaserTNGBuilder
   }
 
   wrapper = textwrap.TextWrapper(width=80, initial_indent='  ',
@@ -2581,17 +2665,28 @@ be passed separately with quotes to avoid confusion (e.g
 --config_flags="--build=debug" --config_flags="--enable_cxx11")""",
                     action="append",
                     default=[])
-  parser.add_argument("--use-conda", "--use_conda", metavar="ENV_DIRECTORY",
+  parser.add_argument("--use-conda", "--use_conda", metavar="ENVIRONMENT",
                     dest="use_conda",
                     help="""Use conda for dependencies. The directory to an
-existing conda environment can be provided. The build will use that environment
-instead of creating a default one for the builder. Also, if a conda environment
-is currently active, $CONDA_PREFIX will be used if ENV_DIRECTORY is not
-provided. Specifying an environment or using $CONDA_PREFIX is for developers
-that maintain their own conda environment.""",
+existing conda environment or a file defining a conda environment can be
+provided. The build will use that environment instead of creating a default one
+for the builder. If the currently active conda environment is to be used for
+building, $CONDA_PREFIX should be the argument for this flag. Otherwise, a new
+environment will be created. The --python3 flag will be ignored when there is
+an argument for this flag. Specifying an environment is for developers that
+maintain their own conda environment.""",
                     default=None, nargs='?', const='')
+
+  parser.add_argument("--build-dir",
+                     dest="build_dir",
+                     help="directory where the build will be. Should be at the same level as modules! default is 'build'",
+                     default="build", type=str)
+
   options = parser.parse_args()
   args = options.action
+
+  global _BUILD_DIR
+  _BUILD_DIR = options.build_dir  # TODO: this is probably ok way to go with globalvar, but check and see
 
   # process external
   options.specific_external_builder=None
@@ -2614,6 +2709,15 @@ that maintain their own conda environment.""",
   for arg in allowedargs:
     if arg in args:
       actions.append(arg)
+
+  # Check if an action was an argument to --use-conda
+  if options.use_conda in allowedargs:
+    if len(options.action) == 0:
+      actions = [options.use_conda]
+    else:
+      actions.append(options.use_conda)
+    options.use_conda = ''
+
   print("Performing actions:", " ".join(actions))
 
   # Check builder

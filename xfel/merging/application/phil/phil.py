@@ -8,25 +8,31 @@ Redesign script for merging xfel data
 
 from xfel.merging.database.merging_database import mysql_master_phil
 master_phil="""
+dispatch {
+  step_list = None
+    .type = strings
+    .help = List of steps to use. None means use the full set of steps to merge.
+}
 input {
   path = None
     .type = str
     .multiple = True
     .help = paths are validated as a glob, directory or file.
     .help = however, validation is delayed until data are assigned to parallel ranks.
-    .help = integrated_experiments (.json) and reflection tables (.pickle) must both be
+    .help = integrated experiments (.expt) and reflection tables (.refl) must both be
     .help = present as matching files.  Only one need be explicitly specified.
-  reflections_suffix = _integrated.pickle
+  reflections_suffix = _integrated.refl
     .type = str
     .help = Find file names with this suffix for reflections
-  experiments_suffix = _integrated_experiments.json
+  experiments_suffix = _integrated.expt
     .type = str
     .help = Find file names with this suffix for experiments
+
   parallel_file_load {
     method = *uniform node_memory
       .type = choice
-      .help = uniform: distribute input json/pickle files uniformly over all ranks
-      .help = node_memory: distribute input json/pickle files over the nodes according to the node memory limit, then uniformly over the ranks within each node
+      .help = uniform: distribute input experiments/reflections files uniformly over all ranks
+      .help = node_memory: assign input experiments/reflections files to as many nodes as necessary so that each node's memory limit is not exceeded. Then distribute the files uniformly over the ranks on each node.
     node_memory {
       architecture = "Cori KNL"
         .type = str
@@ -37,15 +43,31 @@ input {
       pickle_to_memory = 3.5
         .type = float
         .help = an empirical coefficient to convert pickle file size to anticipated run-time process memory required to load a file of that size
-      ranks_per_node = 68
-        .type = int
-        .help = number of ranks available per node
     }
+    ranks_per_node = 68
+        .type = int
+        .help = number of MPI ranks per node
+    balance = global per_node
+      .type = choice
+      .multiple = False
+      .help = balance the input file load by distributing experiments unformly over all available ranks (global) or over the ranks on each node
+    balance_mpi_alltoall_slices = 1
+      .type = int
+      .expert_level = 2
+      .help = memory reduction factor for MPI alltoall.
+      .help = Use mpi_alltoall_slices > 1, when available RAM memory is insufficient for doing MPI alltoall on all data at once.
+      .help = The data will then be split into mpi_alltoall_slices parts and, correspondingly, alltoall will be performed in mpi_alltoall_slices iterations.
   }
 }
 
+mp {
+  method = *mpi
+    .type = choice
+    .help = Muliprocessing method (only mpi at present)
+}
+
 filter
-  .help = The FILTER section defines criteria to accept or reject whole experiments
+  .help = The filter section defines criteria to accept or reject whole experiments
   .help = or to modify the entire experiment by a reindexing operator
   .help = refer to the select section for filtering of individual reflections
   {
@@ -80,6 +102,9 @@ filter
       .help = (key,value) dictionary where key is the filename of the integrated data pickle file (supplied
       .help = with the data phil parameter and value is the h,k,l reindexing operator that resolves the
       .help = indexing ambiguity.
+    sampling_number_of_lattices = 1000
+      .type = int
+      .help = Number of lattices to be gathered from all ranks to run the brehm-diederichs procedure
   }
   resolution {
     d_min = None
@@ -143,7 +168,8 @@ modify
 }
 
 select
-  .help = The SELECT section accepts or rejects specified reflections
+  .help = The select section accepts or rejects specified reflections
+  .help = refer to the filter section for filtering of whole experimens
   {
   algorithm = panel cspad_sensor significance_filter
     .type = choice
@@ -204,6 +230,10 @@ scaling {
       .type = str
       .help = scaling reference column name containing reference structure factors. Can be
       .help = intensities or amplitudes
+    minimum_common_hkls = -1
+      .type = int
+      .help = minimum required number of common hkls between mtz reference and data
+      .help = used to validate mtz-based model. No validation with -1.
   }
   pdb {
     include_bulk_solvent = True
@@ -243,6 +273,11 @@ postrefinement {
     .type = choice
     .help = rs only, eta_deff protocol 7
     .expert_level = 3
+  rs {
+    fix = thetax thetay *RS G BFACTOR
+      .type = choice(multi=True)
+      .help = Which parameters to fix during postrefinement
+  }
   rs2
     .help = Reimplement postrefinement with the following (Oct 2016):
     .help = Refinement engine now work on analytical derivatives instead of finite differences
@@ -353,9 +388,12 @@ output {
   do_timing = False
     .type = bool
     .help = When True, calculate and log elapsed time for execution steps
-  log_level = 0
+  log_level = 1
     .type = int
     .help = how much information to log. TODO: define it.
+  save_experiments_and_reflections = False
+    .type = bool
+    .help = If True, dump the final set of experiments and reflections from the last worker
 }
 
 statistics {
@@ -396,15 +434,12 @@ statistics {
 }
 
 parallel {
-  nproc = 1
-    .type = int
-    .help = Number of processors
-    .help = 1: use no parallel execution.
   a2a = 1
     .type = int
-    .help = memory reduction factor for MPI alltoall (expert only)
-    .help = Use a2a > 1, when available hardware memory is insufficient for MPI alltoall
-    .help = The data is split into a2a parts and alltoall is performed in a2a iterations.
+    .expert_level = 2
+    .help = memory reduction factor for MPI alltoall.
+    .help = Use a2a > 1, when available RAM memory is insufficient for doing MPI alltoall on all data at once.
+    .help = The data will be split into a2a parts and, correspondingly, alltoall will be performed in a2a iterations.
 }
 
 """ + mysql_master_phil

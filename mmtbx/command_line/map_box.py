@@ -35,6 +35,15 @@ master_phil = libtbx.phil.parse("""
     .help = Input map file (CCP4/mrc format).
     .short_caption = Input map file
     .type = str
+  target_ncs_au_file = None
+    .help = File with model indicating which au to choose in extract_unique
+    .short_caption = Input target ncs au file
+    .type = str
+  half_map_list = None
+    .type = strings
+    .help = Half maps (extract_unique only). Supply file names \
+              separated by spaces
+    .short_caption = Half maps (extract_unique only)
   selection = all
     .type = str
     .help = Atom selection to be applied to input PDB file
@@ -50,7 +59,7 @@ master_phil = libtbx.phil.parse("""
     .help = If mask_atoms is False, a box of density will be cut out around\
             the input model (after selections are applied to the model). \
             The size of the box of density will be box_cushion bigger than \
-            the model.
+            the model.  Box cushion also applied if density_select is set.
     .short_caption = Box cushion
 
   mask_atoms=False
@@ -100,6 +109,11 @@ master_phil = libtbx.phil.parse("""
             without the ".pdb" suffix.
     .short_caption = Output file name prefix
 
+  mask_select = False
+    .type = bool
+    .help = Select boundaries (min,max in x,y,z) based on auto-mask
+    .short_caption = Mask select
+
   density_select = False
     .type = bool
     .help = Select boundaries based on where density is located.
@@ -133,21 +147,22 @@ master_phil = libtbx.phil.parse("""
   sequence_file = None
     .type = path
     .help = Sequence file (any standard format). Can be unique part or \
-            all copies.  Used in identification of unique part of map.
+            all copies.  Used in identification of unique part of map \
+            and in masking with mask_select
     .short_caption = Sequence file (optional)
 
   molecular_mass = None
     .type = float
     .help = Molecular mass of object in map in Da (i.e., 33000 for 33 Kd).\
               Used in identification \
-            of unique part of map.
+            of unique part of map and in masking by mask_select.
     .short_caption = Molecular mass (optional)
 
   solvent_content = None
     .type = float
     .help = Optional fraction of volume of map that is empty.  \
             Used in identification \
-            of unique part of map.
+            of unique part of map and in masking by mask_select
     .short_caption = Solvent content
 
   extract_unique = False
@@ -160,7 +175,7 @@ master_phil = libtbx.phil.parse("""
 
   box_buffer = 5
     .type = int
-    .help = Padding around unique region
+    .help = Padding around unique region in extract_unique
     .short_caption = Padding around unique region
 
   soft_mask_extract_unique = True
@@ -195,7 +210,7 @@ master_phil = libtbx.phil.parse("""
 
   soft_mask = False
     .type=bool
-    .help = Use Gaussian mask in mask_atoms
+    .help = Use Gaussian mask in mask_atoms and on outside surface of box
     .short_caption = Soft mask
 
   soft_mask_radius=3
@@ -207,16 +222,31 @@ master_phil = libtbx.phil.parse("""
     .type = ints
     .help = Lower bounds for cut out box. You can specify them directly.\
             NOTE: lower and upper bounds refer to grid points after shifting \
-            the map to place the origin at (0,0,0).
+            the map to place the origin at (0,0,0). To refer to absolute \
+            values specify bounds_are_absolute=True.
     .short_caption = Lower bounds
 
   upper_bounds = None
     .type = ints
     .help = Upper bounds for cut out box.  You can specify them directly.\
             NOTE: lower and upper bounds refer to grid points after shifting \
-            the map to place the origin at (0,0,0).
+            the map to place the origin at (0,0,0). To refer to absolute \
+            values specify bounds_are_absolute=True.
     .short_caption = Upper bounds
 
+  bounds_are_absolute = False
+    .type = bool
+    .help = Define lower and upper bounds as absolute. \
+            NOTE: lower and upper bounds refer to grid points after shifting \
+            the map to place the origin at (0,0,0). To refer to absolute \
+            values specify bounds_are_absolute=True.
+    .short_caption = Bounds are absolute
+
+  zero_outside_original_map = False
+    .type = bool
+    .help = If bounds for new map are outside original map, zero all points\
+             outside of original map
+    .short_caption = Zero outside original map
   keep_map_size = False
     .type=bool
     .help = Keep original map gridding (do not cut anything out). \
@@ -275,6 +305,12 @@ master_phil = libtbx.phil.parse("""
     .help = As output_origin_grid_units, but use origin from this file
     .short_caption = File with origin info
 
+  bounds_match_this_file = None
+    .type = path
+    .help = Take the lower and upper bounds from this map file and apply them \
+             to the input map file.
+    .short_caption = File with bounds to match
+
   output_external_origin = None
     .type = floats
     .help = Write ORIGIN record to map file (this is an external origin \
@@ -330,6 +366,9 @@ def run(args, crystal_symmetry=None,
      ncs_object=None,
      pdb_hierarchy=None,
      map_data=None,
+     mask_data=None,
+     half_map_data_list=None,
+     half_map_labels_list=None,
      lower_bounds=None,
      upper_bounds=None,
      write_output_files=True,
@@ -388,17 +427,21 @@ Parameters:"""%h
   if params.pdb_file and not inputs.pdb_file_names and not pdb_hierarchy:
     inputs.pdb_file_names=[params.pdb_file]
   if(len(inputs.pdb_file_names)!=1 and not params.density_select and not
+    params.mask_select and not
     pdb_hierarchy and not params.keep_map_size and not params.upper_bounds
-     and not params.extract_unique):
+     and not params.extract_unique and not params.bounds_match_this_file):
     raise Sorry("PDB file is needed unless extract_unique, "+
-      "density_select, keep_map_size \nor bounds are set .")
+      "density_select, mask_select, keep_map_size \nor bounds are set .")
   if (len(inputs.pdb_file_names)!=1 and not pdb_hierarchy and \
-       (params.mask_atoms or params.soft_mask )):
-    raise Sorry("PDB file is needed for mask_atoms or soft_mask")
-  if (params.density_select and params.keep_map_size):
-    raise Sorry("Cannot set both density_select and keep_map_size")
-  if (params.density_select and params.upper_bounds):
-    raise Sorry("Cannot set both density_select and bounds")
+       (params.mask_atoms )):
+    raise Sorry("PDB file is needed for mask_atoms")
+  if params.soft_mask and (not params.resolution) and \
+        (len(inputs.pdb_file_names)!=1 and not pdb_hierarchy):
+    raise Sorry("Need resolution for soft_mask without PDB file")
+  if ((params.density_select or params.mask_select) and params.keep_map_size):
+    raise Sorry("Cannot set both density_select/mask_select and keep_map_size")
+  if ((params.density_select or params.mask_select) and params.upper_bounds):
+    raise Sorry("Cannot set both density_select/mask_select and bounds")
   if (params.keep_map_size and params.upper_bounds):
     raise Sorry("Cannot set both keep_map_size and bounds")
   if (params.upper_bounds and not params.lower_bounds):
@@ -434,18 +477,39 @@ Parameters:"""%h
     params.output_format=remove_element(params.output_format,element='mtz')
 
 
-  if params.output_origin_match_this_file:
-
-    af = any_file(params.output_origin_match_this_file)
-    if (af.file_type == 'ccp4_map'):
-      origin=af.file_content.data.origin()
-      params.output_origin_grid_units=origin
-      print("Origin of (%s,%s,%s) taken from %s" %(
-         origin[0],origin[1],origin[2],params.output_origin_match_this_file))
+  if params.output_origin_match_this_file or params.bounds_match_this_file:
+    if params.output_origin_match_this_file:
+      fn=params.output_origin_match_this_file
+      if params.bounds_match_this_file:
+        raise Sorry("Cannot match origin and bounds at same time")
+    else:
+      fn=params.bounds_match_this_file
     if not params.ccp4_map_file:
       raise Sorry(
-       "Need to specify ccp4_map_file=xxx if you use "+
-           "output_origin_match_this_file=xxxx")
+       "Need to specify your input file with ccp4_map_file=xxx if you use "+
+        "output_origin_match_this_file=xxxx or bounds_match_this_file=xxxx")
+
+    af = any_file(fn)
+    if (af.file_type == 'ccp4_map'):
+      origin=af.file_content.data.origin()
+      if params.output_origin_match_this_file:
+        params.output_origin_grid_units=origin
+        print("Origin of (%s,%s,%s) taken from %s" %(
+           origin[0],origin[1],origin[2],fn))
+      else:
+        all=af.file_content.data.all()
+        params.lower_bounds=origin
+        print("Lower bounds of (%s,%s,%s) taken from %s" %(
+           params.lower_bounds[0],params.lower_bounds[1],
+             params.lower_bounds[2],fn))
+        params.upper_bounds=list(col(origin)+col(all)-col((1,1,1)))
+        print("upper bounds of (%s,%s,%s) taken from %s" %(
+           params.upper_bounds[0],params.upper_bounds[1],
+            params.upper_bounds[2],fn))
+        params.bounds_are_absolute=True
+    else:
+      raise Sorry("Unable to interpret %s as map file" %(fn))
+
   if params.output_origin_grid_units is not None and params.keep_origin:
     params.keep_origin=False
     print("Setting keep_origin=False as output_origin_grid_units is set")
@@ -509,6 +573,22 @@ Parameters:"""%h
           inputs.ccp4_map_file_name[:-4])
   else: # have map_data
     map_or_map_coeffs_prefix=None
+
+  if params.half_map_list and (not half_map_data_list):
+    if not params.extract_unique:
+      raise Sorry("Can only use half_map_with extract_unique")
+    print ("Reading half-maps",params.half_map_list)
+    half_map_data_list=[]
+    half_map_labels_list=[]
+    for fn in params.half_map_list:
+      print("Reading half map from %s" %(fn),file=log)
+      af = any_file(fn)
+      print_statistics.make_sub_header("CCP4 map", out=log)
+      h_ccp4_map = af.file_content
+      h_ccp4_map.show_summary(prefix="  ",out=log)
+      h_map_data = h_ccp4_map.data
+      half_map_data_list.append(h_map_data)
+      half_map_labels_list.append(h_ccp4_map.get_labels())
 
   if params.map_scale_factor:
     print("Applying scale factor of %s to map data on read-in" %(
@@ -582,7 +662,7 @@ Parameters:"""%h
 
   # Get sequence if extract_unique is set
   sequence=None
-  if params.extract_unique:
+  if params.extract_unique or params.mask_select:
     if params.sequence_file:
       if n_ops > 1: # get unique part of sequence
         remove_duplicates=True
@@ -613,7 +693,7 @@ Parameters:"""%h
         n_dna=0
       params.molecular_mass=n_ops*(n_protein*110+(n_rna+n_dna)*330)
       print("\nEstimate of molecular mass is %.0f " %(params.molecular_mass), file=log)
-  if params.density_select:
+  if params.density_select or params.mask_select:
     print_statistics.make_sub_header(
     "Extracting box around selected density and writing output files", out=log)
   else:
@@ -624,8 +704,11 @@ Parameters:"""%h
     print("\nValue outside atoms mask will be set to mean inside mask", file=log)
   if params.get_half_height_width and params.density_select:
     print("\nHalf width at half height will be used to id boundaries", file=log)
+
   if params.soft_mask and sites_cart_all.size()>0:
     print("\nSoft mask will be applied to model-based mask", file=log)
+  elif params.soft_mask:
+    print ("\nSoft mask will be applied to outside of map box",file=log)
   if params.keep_map_size:
     print("\nEntire map will be kept (not cutting out region)", file=log)
   if params.restrict_map_size:
@@ -634,11 +717,15 @@ Parameters:"""%h
     print("Bounds for cut out map are (%s,%s,%s) to (%s,%s,%s)" %(
      tuple(list(params.lower_bounds)+list(params.upper_bounds))), file=log)
 
+  if mask_data:
+    mask_data=mask_data.as_double()
   box = mmtbx.utils.extract_box_around_model_and_map(
     xray_structure   = xray_structure,
     map_data         = map_data.as_double(),
+    mask_data        = mask_data,
     box_cushion      = params.box_cushion,
     selection        = selection,
+    mask_select      = params.mask_select,
     density_select   = params.density_select,
     threshold        = params.density_select_threshold,
     get_half_height_width = params.get_half_height_width,
@@ -651,7 +738,10 @@ Parameters:"""%h
     restrict_map_size     = params.restrict_map_size,
     lower_bounds          = params.lower_bounds,
     upper_bounds          = params.upper_bounds,
+    bounds_are_absolute   = params.bounds_are_absolute,
+    zero_outside_original_map   = params.zero_outside_original_map,
     extract_unique        = params.extract_unique,
+    target_ncs_au_file    = params.target_ncs_au_file,
     regions_to_keep       = params.regions_to_keep,
     box_buffer            = params.box_buffer,
     soft_mask_extract_unique = params.soft_mask_extract_unique,
@@ -664,13 +754,16 @@ Parameters:"""%h
     resolution            = params.resolution,
     ncs_object            = ncs_object,
     symmetry              = params.symmetry,
-
+    half_map_data_list    = half_map_data_list,
     )
 
   ph_box = pdb_hierarchy.select(selection)
   ph_box.adopt_xray_structure(box.xray_structure_box)
   box.hierarchy=ph_box
 
+  if params.mask_select:
+    print("\nSolvent content used in mask_select: %.3f " %(
+      box.get_solvent_content()),file=log)
   if (inputs and
     inputs.crystal_symmetry and inputs.ccp4_map and
     inputs.crystal_symmetry.unit_cell().parameters() and
@@ -732,6 +825,7 @@ Parameters:"""%h
 
   print("\nBox cell dimensions: (%.2f, %.2f, %.2f) A" %(
       box.box_crystal_symmetry.unit_cell().parameters()[:3]), file=log)
+
   if box.shift_cart:
      print("Working origin moved from grid position of"+\
         ": (%d, %d, %d) to (0,0,0) " %(
@@ -770,6 +864,7 @@ Parameters:"""%h
       print("\nOutput files are in same location as original and origin "+\
         "is at (0,0,0)\n", file=log)
 
+  print("\nBox grid: (%s, %s, %s) " %(output_box.map_box.all()))
   ph_output_box_output_location = ph_box.deep_copy()
   if output_box.shift_cart:  # shift coordinates and NCS back by shift_cart
     # NOTE output_box.shift_cart could be different than box.shift_cart if
@@ -911,6 +1006,32 @@ Parameters:"""%h
        output_external_origin=params.output_external_origin)
      print("Writing boxed map "+\
           "to CCP4 formatted file:   %s"%file_name, file=log)
+     if not params.half_map_list:
+        params.half_map_list=[]
+     if not output_box.map_box_half_map_list:
+       output_box.map_box_half_map_list=[]
+     if not half_map_labels_list:
+       half_map_labels_list=len(output_box.map_box_half_map_list)*[None]
+     for hm,labels,fn in zip(
+       output_box.map_box_half_map_list,
+       half_map_labels_list,
+       params.half_map_list):  # half maps matching
+       labels=create_output_labels(program_name=program_name,
+         input_file_name=fn,
+         input_labels=labels,
+         limitations=limitations,
+         output_labels=params.output_map_labels)
+       hm_fn="%s_box.ccp4" %( ".".join(os.path.basename(fn).split(".")[:-1]))
+       output_box.write_ccp4_map(file_name=hm_fn,
+         map_data=hm,
+         output_crystal_symmetry=output_crystal_symmetry,
+         output_mean=params.output_ccp4_map_mean,
+         output_sd=params.output_ccp4_map_sd,
+         output_unit_cell_grid=output_unit_cell_grid,
+         shift_back=shift_back,
+         output_map_labels=labels,
+         output_external_origin=params.output_external_origin)
+       print ("Writing boxed half map to: %s " %(hm_fn),file=log)
 
     # Write xplor map.  Shift back if keep_origin=True
     if("xplor" in params.output_format):

@@ -133,21 +133,35 @@ class symmetry(object):
     fmt = (
       'crystal.symmetry(\n'
       '%s  unit_cell=%s,\n'
-      '%s  space_group_symbol="%s")')
+      '%s  space_group_symbol=%s\n'
+      '%s)')
     return fmt % (
-      indent, str(self.unit_cell()),
-      indent, str(self.space_group_info()))
+      indent,
+      "(%.10g, %.10g, %.10g, %.10g, %.10g, %.10g)" % self.unit_cell().parameters()
+      if self.unit_cell() is not None else None,
+      indent,
+      '"%s"' % self.space_group_info().type().lookup_symbol()
+      if self.space_group_info() is not None else None,
+      indent
+    )
 
   def show_summary(self, f=None, prefix=""):
     if (f is None): f = sys.stdout
-    if (self.unit_cell() is None):
-      print(prefix + "Unit cell:", None, file=f)
-    else:
-      self.unit_cell().show_parameters(f=f, prefix=prefix+"Unit cell: ")
-    if (self.space_group_info() is None):
-      print(prefix + "Space group:", None, file=f)
-    else:
-      self.space_group_info().show_summary(f=f, prefix=prefix+"Space group: ")
+    print(self.as_str(prefix=prefix), file=f)
+
+  def as_str(self, prefix=""):
+    return (
+      prefix + "Unit cell: %s\n" % self.unit_cell() +
+      prefix + "Space group: %s" % (
+        self.space_group_info().symbol_and_number()
+        if self.space_group_info() is not None else None)
+    )
+
+  def __str__(self):
+    return self.as_str()
+
+  def __repr__(self):
+    return self.as_py_code(indent="  ")
 
   def is_similar_symmetry(self,
                           other,
@@ -442,7 +456,7 @@ class symmetry(object):
         result.append(self.unit_cell().orthogonalize(m3.elems*site_frac+t)[0])
     return result
 
-  def is_nonsence(self):
+  def is_nonsense(self):
     uc = self.unit_cell()
     if uc is None:
       return False
@@ -482,11 +496,11 @@ def select_crystal_symmetry(
     while cs0 is None and i<len(tmp):
       cs0 = tmp[i]
       if cs0 is not None:
-        if cs0.is_nonsence() or cs0.is_empty():
+        if cs0.is_nonsense() or cs0.is_empty():
           cs0 = None
       i += 1
     for cs in tmp[i:]:
-      if cs and not cs.is_nonsence() and not cs.is_empty():
+      if cs and not cs.is_nonsense() and not cs.is_empty():
         is_similar_cs = cs0.is_similar_symmetry(cs,
            absolute_angle_tolerance=absolute_angle_tolerance,
            absolute_length_tolerance=absolute_angle_tolerance)
@@ -529,7 +543,7 @@ def select_crystal_symmetry(
           space_group_info=space_group_info,
           assert_is_compatible_unit_cell=False)
         break
-  if result.is_nonsence():
+  if result.is_nonsense():
     return None
   if result.is_empty():
     return None

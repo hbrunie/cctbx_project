@@ -145,8 +145,8 @@ def run(args):
     outliers = []
     #bonds
     #for result in rc.bonds.results:
-    for result in sorted(rc.bonds.results, key=lambda x: (x.atoms_info[0].resseq, get_altloc(atoms_info=x.atoms_info), get_atoms_str(atoms_info=x.atoms_info))):
-      atom_info = result.atoms_info[0]
+    for result in sorted(rc.bonds.results, key=lambda x: (x.atoms_info[1].resseq, get_altloc(atoms_info=x.atoms_info), get_atoms_str(atoms_info=x.atoms_info))):
+      atom_info = result.atoms_info[1]
       # label:chain:number:ins:alt:type:measure:value:sigmas:class
       atoms_str = get_atoms_str(atoms_info=result.atoms_info)
       altloc = get_altloc(atoms_info=result.atoms_info)
@@ -162,10 +162,27 @@ def run(args):
                         chain_types[atom_info.chain_id]] )
     #angles
     #for result in rc.angles.results:
-    for result in sorted(rc.angles.results, key=lambda x: (x.atoms_info[0].resseq, get_altloc(atoms_info=x.atoms_info), get_atoms_str(atoms_info=x.atoms_info))):
-      atom_info = result.atoms_info[0]
+    for result in sorted(rc.angles.results, key=lambda x: (x.atoms_info[1].resseq, get_altloc(atoms_info=x.atoms_info), get_atoms_str(atoms_info=x.atoms_info))):
+      atom_info = result.atoms_info[1]
       # label:chain:number:ins:alt:type:measure:value:sigmas:class
       atoms_str = get_atoms_str(atoms_info=result.atoms_info)
+      altloc = get_altloc(atoms_info=result.atoms_info)
+      chain_id = atom_info.chain_id
+      outliers.append( [chain_id,
+                        atom_info.resseq,
+                        atom_info.icode,
+                        altloc,
+                        atom_info.resname,
+                        atoms_str,
+                        result.model,
+                        result.score,
+                        chain_types[atom_info.chain_id]] )
+
+    for result in sorted(rc.chiralities.results, key=lambda x: (x.atoms_info[0].resseq, get_altloc(atoms_info=x.atoms_info), get_atoms_str(atoms_info=x.atoms_info))):
+      atom_info = result.atoms_info[0]
+      # label:chain:number:ins:alt:type:measure:value:sigmas:class
+      #atoms_str = get_atoms_str(atoms_info=result.atoms_info)
+      atoms_str = result.atoms_info[0].name.strip() #report chiral center instead of atom list
       altloc = get_altloc(atoms_info=result.atoms_info)
       chain_id = atom_info.chain_id
       outliers.append( [chain_id,

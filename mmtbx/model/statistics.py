@@ -104,7 +104,7 @@ class geometry(object):
     outliers = 0
     if(self.from_restraints is not None):
       mi,ma,me = self.from_restraints.dihedral_deviations()
-      n = self.from_restraints.n_dihedral_proxies
+      n = self.from_restraints.get_filtered_n_dihedral_proxies()
       outliers = self.from_restraints.dihedral_proxies.get_outliers(
         sites_cart = self.pdb_hierarchy.atoms().extract_xyz(),
         sigma_threshold=4)
@@ -114,7 +114,7 @@ class geometry(object):
     mi,ma,me,n = 0,0,0,0
     if(self.from_restraints is not None):
       mi,ma,me = self.from_restraints.planarity_deviations()
-      n = self.from_restraints.n_planarity_proxies
+      n = self.from_restraints.get_filtered_n_planarity_proxies()
     return group_args(min = mi, max = ma, mean = me, n = n)
 
   def parallelity(self):
@@ -240,11 +240,15 @@ class geometry(object):
          cablam           = self.cablam(), # hopefully stable
          omega            = self.omega())
     if(slim):
-      self.cached_result.ramachandran.ramalyze = None
-      self.cached_result.clash.clashes         = None
-      self.cached_result.rotamer.rotalyze      = None
-      self.cached_result.rotamer.omegalyze     = None
-      self.cached_result.cablam.gui_table      = None
+      delattr(self.cached_result.ramachandran, "ramalyze")
+      delattr(self.cached_result.clash,        "clashes")
+      delattr(self.cached_result.rotamer,      "rotalyze")
+      delattr(self.cached_result.cablam,       "gui_table")
+      delattr(self.cached_result.omega,        "omegalyze")
+      delattr(self.cached_result.c_beta,       "cbetadev")
+      delattr(self.cached_result.angle,        "outliers")
+      delattr(self.cached_result.bond,         "outliers")
+      delattr(self.cached_result.dihedral,     "outliers")
     return self.cached_result
 
   def show_short(self):
@@ -320,7 +324,7 @@ class geometry(object):
     if cif_block is None:
       cif_block = iotbx.cif.model.block()
     cif_block["_refine.pdbx_stereochemistry_target_values"] = \
-      self.restraints_source
+        self.restraints_source if self.restraints_source is not None else '?'
     loop = iotbx.cif.model.loop(header=(
       "_refine_ls_restr.pdbx_refine_id",
       "_refine_ls_restr.type",
@@ -554,7 +558,7 @@ class info(object):
         self.model.torsion_NCS_as_pdb()]:
       if len(info_pdb_str) > 0:
         print(prefix, file=out)
-        print(info_pdb_str, end=' ', file=out)
+        print(info_pdb_str, end='', file=out)
 
   def as_cif_block(self, cif_block=None):
     if cif_block is None:

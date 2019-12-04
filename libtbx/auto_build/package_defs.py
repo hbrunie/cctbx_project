@@ -25,7 +25,11 @@ except (ValueError, ImportError):
   from bootstrap import Toolbox
   from installer_utils import *
 
-BASE_CCI_PKG_URL = "http://cci.lbl.gov/cctbx_dependencies"
+BASE_CCI_PKG_URL = [
+  "http://cci.lbl.gov/cctbx_dependencies",
+  "https://gitcdn.link/repo/dials/dependencies/master",
+  "https://github.com/dials/dependencies/raw/master",
+]
 
 def get_pypi_package_information(package, version=None, information_only=False):
   '''Retrieve information about a PyPi package.'''
@@ -51,10 +55,14 @@ def get_pypi_package_information(package, version=None, information_only=False):
     package[field] = pkginfo['info'][field]
   return package
 
-DEPENDENCIES_BASE = "https://gitcdn.xyz/repo/dials/dependencies/master/"
-OPENSSL_PKG = "openssl-1.0.2r.tar.gz"    # OpenSSL
+DEPENDENCIES_BASE = [
+  "https://gitcdn.link/repo/dials/dependencies/master",
+  "https://github.com/dials/dependencies/raw/master",
+  "https://gitcdn.xyz/repo/dials/dependencies/master",
+]
+OPENSSL_PKG = "openssl-1.0.2s.tar.gz"    # OpenSSL
 PYTHON3_PKG = "Python-3.7.2.tgz"
-PYTHON_PKG = "Python-2.7.16.tgz"
+PYTHON_PKG = "Python-2.7.17.tgz"
 
 # from CCI
 IMAGING_PKG = "Imaging-1.1.7.tar.gz"     # for labelit, gltbx
@@ -67,34 +75,33 @@ LIBSVM_PKG = "libsvm-3.17_cci.tar.gz"
 
 # from PyPi
 CYTHON_VERSION = "0.28.6"
-BLOSC_VERSION = "1.7.0"
 DOCUTILS_VERSION = "0.14"
 FUTURE_VERSION = "0.17.1"
-H5PY_VERSION = "2.9.0"
+H5PY_VERSION = "2.10.0"
 JINJA2_VERSION = "2.10"
-MOCK_VERSION = "2.0.0"
-MSGPACK_VERSION = "0.6.1"
+MOCK_VERSION = "3.0.5"
 MPI4PY_VERSION = "3.0.0"
+MRCFILE_VERSION = "1.1.2"
+MSGPACK_VERSION = "0.6.1"
 NUMPY_VERSION="1.15.4"
 ORDEREDSET_VERSION = "2.0.1"
 PILLOW_VERSION = "5.4.1"
-PROCRUNNER_VERSION = "0.9.1"
+PROCRUNNER_VERSION = "1.0.2"
 PY2APP_VERSION="0.7.3"
-PYTEST_VERSION = "3.10.1"
-PYTEST_XDIST_VERSION = "1.26.1"
-SCIPY_VERSION = "1.2.1"
+PYTEST_VERSION = "4.6.5"
+PYTEST_XDIST_VERSION = "1.29.0"
 SCIKIT_LEARN_VERSION = "0.20.2"
+SCIPY_VERSION = "1.2.1"
 SEND2TRASH_VERSION = "1.5.0"
 SIX_VERSION = "1.12.0"
 SPHINX_VERSION = "1.8.4" # for documentation
 TABULATE_VERSION = "0.8.3"
 TQDM_VERSION = "4.23.4"
 PSUTIL_VERSION = "5.5.1"
-MRCFILE_VERSION = "1.1.2"
 
 # HDF5
-BASE_HDF5_PKG_URL = "https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.10/hdf5-1.10.4/src/"
-HDF5_PKG = "hdf5-1.10.4.tar.bz2"
+BASE_HDF5_PKG_URL = "https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.10/hdf5-1.10.5/src/"
+HDF5_PKG = "hdf5-1.10.5.tar.bz2"
 
 # GUI dependencies
 LIBPNG_PKG = "libpng-1.6.36.tar.gz"
@@ -205,7 +212,7 @@ class fetch_packages(object):
                 pkg_url=None,
                 output_file=None,
                 return_file_and_status=False,
-                download_url=None, # If given this is the URL used for downloading, otherwise construct using pgk_url and pkg_name
+                download_url=None, # If given this is the URL used for downloading, otherwise construct using pkg_url and pkg_name
                 ):
     if (pkg_url is None):
       pkg_url = BASE_CCI_PKG_URL
@@ -236,20 +243,39 @@ class fetch_packages(object):
       else :
         raise RuntimeError(("Package '%s' not found on local filesystems.  ") %
           pkg_name)
-    full_url = download_url or "%s/%s" % (pkg_url, pkg_name)
-    if not download_url:
-      self.log.write("    downloading from %s : " % pkg_url)
 
-    size = self.toolbox.download_to_file(full_url, output_file, log=self.log)
-    if (size == -2):
-      print("    using ./%s (cached)" % pkg_name, file=self.log)
-      if return_file_and_status:
-        return op.join(self.dest_dir, output_file), size
-      return op.join(self.dest_dir, output_file)
-    assert size > 0, "File %s has size %d" % (pkg_name, size)
-    if return_file_and_status:
-      return op.join(self.dest_dir, output_file), size
-    return op.join(self.dest_dir, output_file)
+    # Generate list of possible URL candidates
+    if download_url:
+      if isinstance(download_url, list):
+        urls = download_url
+      else:
+        urls = [download_url]
+    else:
+      if isinstance(pkg_url, list):
+        urls = ["%s/%s" % (p, pkg_name) for p in pkg_url]
+      else:
+        urls = ["%s/%s" % (pkg_url, pkg_name)]
+
+    for url_attempt in urls:
+      self.log.write("    downloading from %s : " % url_attempt)
+      for retry in (3,3,0):
+        try:
+          size = self.toolbox.download_to_file(url_attempt, output_file, log=self.log)
+          if (size == -2):
+            print("    using ./%s (cached)" % pkg_name, file=self.log)
+            if return_file_and_status:
+              return op.join(self.dest_dir, output_file), size
+            return op.join(self.dest_dir, output_file)
+          assert size > 0, "File %s has size %d" % (pkg_name, size)
+          if return_file_and_status:
+            return op.join(self.dest_dir, output_file), size
+          return op.join(self.dest_dir, output_file)
+        except Exception as e:
+          self.log.write("    download failed with %s" % str(e))
+          if retry:
+            self.log.write("    retrying in %d seconds" % retry)
+            time.sleep(retry)
+    raise RuntimeError("Could not download " + pkg_name)
 
 def fetch_all_dependencies(dest_dir,
     log,

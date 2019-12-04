@@ -16,13 +16,23 @@ class unit_cell_distribution(object):
     self.logger = logger
     self.mpi_helper = mpi_helper
 
+    # this rank cell values
     self.uc_a_values = flex.double()
     self.uc_b_values = flex.double()
     self.uc_c_values = flex.double()
 
+    self.uc_alpha_values  = flex.double()
+    self.uc_beta_values   = flex.double()
+    self.uc_gamma_values  = flex.double()
+
+    # all ranks cell values
     self.all_uc_a_values = flex.double()
     self.all_uc_b_values = flex.double()
     self.all_uc_c_values = flex.double()
+
+    self.all_uc_alpha_values  = flex.double()
+    self.all_uc_beta_values   = flex.double()
+    self.all_uc_gama_values   = flex.double()
 
   def add_cell(self, unit_cell):
     if unit_cell is None:
@@ -32,15 +42,30 @@ class unit_cell_distribution(object):
     self.uc_b_values.append(b)
     self.uc_c_values.append(c)
 
+    self.uc_alpha_values.append(alpha)
+    self.uc_beta_values.append(beta)
+    self.uc_gamma_values.append(gamma)
+
   def collect_from_all_ranks(self):
     self.all_uc_a_values = self.mpi_helper.aggregate_flex(self.uc_a_values, flex.double)
     self.all_uc_b_values = self.mpi_helper.aggregate_flex(self.uc_b_values, flex.double)
     self.all_uc_c_values = self.mpi_helper.aggregate_flex(self.uc_c_values, flex.double)
 
+    self.all_uc_alpha_values  = self.mpi_helper.aggregate_flex(self.uc_alpha_values, flex.double)
+    self.all_uc_beta_values   = self.mpi_helper.aggregate_flex(self.uc_beta_values, flex.double)
+    self.all_uc_gamma_values  = self.mpi_helper.aggregate_flex(self.uc_gamma_values, flex.double)
+
+  def is_valid(self):
+    return len(self.all_uc_a_values) > 0 and len(self.all_uc_b_values) > 0 and len(self.all_uc_c_values) > 0 and \
+           len(self.all_uc_alpha_values) > 0 and len(self.all_uc_beta_values) > 0 and len(self.all_uc_gamma_values) > 0
+
   def show_histograms(self, n_slots=histogram_slots):
     assert self.mpi_helper.rank == 0
 
-    [a0,b0,c0,alpha0,beta0,gamma0] = self.reference_unit_cell.parameters()
+    if self.reference_unit_cell is None:
+      a0 = b0 = c0 = alpha0 = beta0 = gamma0 = None
+    else:
+      a0,b0,c0,alpha0,beta0,gamma0 = self.reference_unit_cell.parameters()
 
     self.logger.main_log("")
 
@@ -49,17 +74,16 @@ class unit_cell_distribution(object):
     ref_edges = [a0,b0,c0]
 
     def _show_each(edges):
-
       for edge, ref_edge, label in zip(edges, ref_edges, labels):
         h = flex.histogram(edge, n_slots=n_slots)
-
         smin, smax = flex.min(edge), flex.max(edge)
         stats = flex.mean_and_variance(edge)
 
         self.logger.main_log("  %s edge"%label)
         self.logger.main_log("     range:     %6.2f - %.2f"%(smin, smax))
         self.logger.main_log("     mean:      %6.2f +/- %6.2f on N = %d" %(stats.mean(), stats.unweighted_sample_standard_deviation(), edge.size()))
-        self.logger.main_log("     reference: %6.2f"%ref_edge)
+        if ref_edge is not None:
+          self.logger.main_log("     reference: %6.2f"%ref_edge)
 
         out = StringIO()
         h.show(f=out, prefix="    ", format_cutoffs="%6.2f")
@@ -73,18 +97,19 @@ class unit_cell_distribution(object):
     b = flex.mean(self.all_uc_b_values)
     c = flex.mean(self.all_uc_c_values)
 
-    return uctbx.unit_cell(list((a,b,c)) + list(self.reference_unit_cell.parameters()[3:]))
+    alpha = flex.mean(self.all_uc_alpha_values)
+    beta  = flex.mean(self.all_uc_beta_values)
+    gamma = flex.mean(self.all_uc_gamma_values)
+
+    return uctbx.unit_cell([a,b,c,alpha,beta,gamma])
 
 class unit_cell_statistics(worker):
 
+  def __init__(self, params, mpi_helper=None, mpi_logger=None):
+    super(unit_cell_statistics, self).__init__(params=params, mpi_helper=mpi_helper, mpi_logger=mpi_logger)
+
   def __repr__(self):
     return 'Unit cell statistics'
-
-  '''
-  def __init__(self, params, save_average=False):
-    super(unit_cell_statistics, self).__init__(params=params)
-    self.save_average = save_average
-  '''
 
   def run(self, experiments, reflections):
     self.logger.log_step_time("UNIT_CELL_STATISTICS")
@@ -92,11 +117,12 @@ class unit_cell_statistics(worker):
     for experiment in experiments:
       ucd.add_cell(experiment.crystal.get_unit_cell())
     ucd.collect_from_all_ranks()
+
+    average_unit_cell = None
     if self.mpi_helper.rank == 0:
-      ucd.show_histograms()
-      average_unit_cell = ucd.get_average_cell()
-    else:
-      average_unit_cell = None
+      if ucd.is_valid():
+        ucd.show_histograms()
+        average_unit_cell = ucd.get_average_cell()
 
     self.logger.log_step_time("BROADCAST_UNIT_CELL")
     average_unit_cell = self.mpi_helper.comm.bcast(average_unit_cell, root = 0)

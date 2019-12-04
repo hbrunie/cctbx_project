@@ -8,6 +8,7 @@ import libtbx.phil
 import mmtbx.model
 
 from cctbx import crystal
+from libtbx.program_template import ProgramTemplate
 from libtbx.utils import Sorry
 from iotbx.data_manager import DataManager
 from six.moves import zip
@@ -205,6 +206,12 @@ END
   dm.process_model_str(test_filename, model_str)
   dm.write_model_file(model_str, filename=test_filename, overwrite=True)
   assert(test_filename in dm.get_model_names())
+  m = dm.get_model(test_filename)
+  dm.write_model_file(m, overwrite=True)
+  pdb_filename = 'cctbx_program.pdb'
+  assert(os.path.exists(pdb_filename))
+  dm.process_model_file(pdb_filename)
+  assert(not dm.get_model(pdb_filename).input_format_was_cif())
 
   # test type
   assert(dm.get_model_type() == 'x_ray')
@@ -241,6 +248,14 @@ END
   dm.process_model_file(test_filename)
   os.remove(test_filename)
   assert(test_filename in dm.get_model_names())
+  m = dm.get_model(test_filename)
+  dm.write_model_file(m, overwrite=True)
+  cif_filename = 'cctbx_program.cif'
+  assert(os.path.exists(cif_filename))
+  dm.process_model_file(cif_filename)
+  assert(dm.get_model(cif_filename).input_format_was_cif())
+  os.remove(pdb_filename)
+  os.remove(cif_filename)
 
   # test pdb_interpretation
   extract = mmtbx.model.manager.get_default_pdb_interpretation_params()
@@ -559,6 +574,43 @@ def test_default_filenames():
     filename = getattr(dm, 'get_default_output_{datatype}_filename'.
                        format(datatype=datatype))()
     assert filename == 'cctbx_program.' + extension
+
+  filename = dm.get_default_output_model_filename(extension='.abc')
+  assert filename == 'cctbx_program.abc'
+
+  class TestProgram(ProgramTemplate):
+    master_phil_str = """
+output {
+  serial = 0
+    .type = int
+}
+"""
+  master_phil = iotbx.phil.parse(TestProgram.master_phil_str)
+  working_phil = iotbx.phil.parse(ProgramTemplate.master_phil_str)
+  params = master_phil.fetch(working_phil).extract()
+  p = ProgramTemplate(dm, params, master_phil)
+  assert dm.get_default_output_filename() == 'cctbx_program_000'
+  dm.set_overwrite(True)
+  dm.write_model_file('abc')    # cctbx_program_000.cif
+  dm.write_phil_file('123')     # cctbx_program_000.eff
+  dm.write_phil_file('456')     # cctbx_program_001.eff
+  dm.write_model_file('def')    # cctbx_program_001.cif
+  assert dm.get_default_output_filename() == 'cctbx_program_001'
+  dm.write_sequence_file('ghi') # cctbx_program_001.seq
+  dm.write_sequence_file('hkl') # cctbx_program_002.seq
+  assert dm.get_default_output_filename() == 'cctbx_program_002'
+  assert os.path.isfile('cctbx_program_000.cif')
+  assert os.path.isfile('cctbx_program_001.cif')
+  assert os.path.isfile('cctbx_program_000.eff')
+  assert os.path.isfile('cctbx_program_001.eff')
+  assert os.path.isfile('cctbx_program_001.seq')
+  assert os.path.isfile('cctbx_program_002.seq')
+  os.remove('cctbx_program_000.cif')
+  os.remove('cctbx_program_001.cif')
+  os.remove('cctbx_program_000.eff')
+  os.remove('cctbx_program_001.eff')
+  os.remove('cctbx_program_001.seq')
+  os.remove('cctbx_program_002.seq')
 
 # -----------------------------------------------------------------------------
 if (__name__ == '__main__'):

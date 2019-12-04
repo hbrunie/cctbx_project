@@ -225,6 +225,7 @@ class any_reflection_file(object):
                        base_array_info=None,
                        assume_shelx_observation_type_is=None,
                        enforce_positive_sigmas=False,
+                       anomalous=None,
      ):
     """
     Convert the contents of the reflection file into a list of
@@ -294,7 +295,7 @@ class any_reflection_file(object):
         shelx_file.seek(0)
         remaining = shelx_file.read()
         shelx_file.close()
-        m = re.search("^HKLF\s*(\d)", remaining, re.X|re.M|re.S)
+        m = re.search(r"^HKLF\s*(\d)", remaining, re.X|re.M|re.S)
         if m is None:
           raise Sorry("%s does not contain the mandatory HKLF instruction"
                       % shelx_file.name)
@@ -309,7 +310,8 @@ class any_reflection_file(object):
       force_symmetry=force_symmetry,
       merge_equivalents=merge_equivalents,
       base_array_info=base_array_info,
-      )
+      anomalous=anomalous,
+    )
     if (self.file_type() == "shelx_hklf"):
       if ((self._observation_type == "intensities") or
           (assume_shelx_observation_type_is == "intensities")):
