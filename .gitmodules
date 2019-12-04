@@ -1,0 +1,3 @@
+[submodule "LS49"]
+	path = LS49
+	url = https://github.com/nksauter/LS49.git
